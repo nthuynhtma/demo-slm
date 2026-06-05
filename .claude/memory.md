@@ -11,6 +11,8 @@
 | 2026-06 | **fonnx** cho ONNX runtime thay vì onnxruntime_flutter | fonnx actively maintained (last push 2026-05-22), onnxruntime_flutter stalled since Dec 2024 |
 | 2026-06 | **LiteRT-LM 0.10.35** là target version | Latest stable (April 2026), hỗ trợ streaming callback đầy đủ |
 | 2026-06 | **iOS bridge dùng `LlmInference.Session` cho generation settings** | Với MediaPipeTasksGenAI 0.10.35, `temperature/topk` nằm ở session options, không nằm ở engine options |
+| 2026-06 | **Băm SHA256 dạng stream để tránh OOM** | Tránh lỗi tràn bộ nhớ (OOM) khi băm file model nặng 2.6GB trên thiết bị di động |
+| 2026-06 | **Resumable download qua Dio Range** | Hỗ trợ tải tiếp tục model 2.6GB bằng HTTP Range header để tăng độ ổn định |
 
 ## Open Questions — Research Results (2026-06)
 
@@ -71,6 +73,8 @@
 - iOS không support background streaming → cần save session state khi app vào background
 - iOS sample code cũ trong rules có thể bị outdated: SDK 0.10.35 không còn callback `(partial, error, done)` cho Swift
 - `flutter build ios --debug --no-codesign` đã pass sau khi sửa iOS bridge theo registrar API + session-based generation
+- **Dio ResponseBody headers**: Khi cấu hình `ResponseType.stream` trong Dio, `response.data?.headers` trả về kiểu raw `Map<String, List<String>>` chứ không phải class `Headers`. Cần truy xuất header qua `headers[headerName]?.first`.
+- **Băm SHA-256 không gây OOM**: Tránh dùng `file.readAsBytes()` đối với file model lớn (2.6GB), cần dùng `sha256.bind(file.openRead())` để stream bytes qua bộ băm giúp bảo vệ RAM trên mobile.
 
 ## Documentation Sync Notes (2026-06-05)
 
@@ -106,6 +110,10 @@
 - `EmbeddingChannel` now implements `EmbeddingService` directly, preventing runtime cast failure when `USE_MOCK=false`
 - `MockInferenceService` should not emit a literal `[DONE]` token because the Dart layer expects stream completion, not a sentinel token, from mock implementations
 - Model download path was aligned to `ApplicationSupport` instead of `Documents`
+- **Tích hợp RAG vào ChatBloc**: Rút trích 3 chunks văn bản khớp nhất qua `RagRetriever`, định dạng và gắn trực tiếp vào user prompt gửi cho LLM. Lịch sử hiển thị UI được giữ gọn gàng (chỉ chứa truy vấn gốc).
+- **Cải tiến ModelDownloader**: Hỗ trợ Range headers để tiếp tục tải khi đứt mạng, kiểm tra bộ nhớ trống (>3.0GB), và kiểm tra checksum SHA256 dạng stream an toàn cho RAM.
+- **Nâng cấp UI Material 3**: RAG toggle, model status chip, bảng điều khiển cấu hình model/RAG dạng Drawer, và tích hợp các tài liệu mẫu để kiểm thử nhanh.
+- **Vượt qua các bài kiểm thử**: Tạo file `test/rag_chat_test.dart` và sửa lỗi test biên dịch. Toàn bộ test suite chạy thành công.
 
 ## Context Window Notes
 

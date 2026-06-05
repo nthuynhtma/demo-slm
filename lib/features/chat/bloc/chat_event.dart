@@ -38,7 +38,7 @@ class ClearChat extends ChatEvent {
   const ClearChat();
 }
 
-/// Report an error that occurred during inference.
+/// Report an error that occurred during inference or download.
 class ChatError extends ChatEvent {
   final String errorMessage;
 
@@ -47,3 +47,50 @@ class ChatError extends ChatEvent {
   @override
   List<Object?> get props => [errorMessage];
 }
+
+/// Toggle RAG mode on/off.
+class ToggleRag extends ChatEvent {
+  const ToggleRag();
+}
+
+/// Explicitly trigger downloading of the model file.
+class DownloadModel extends ChatEvent {
+  const DownloadModel();
+}
+
+/// Update model download progress.
+class DownloadProgressUpdate extends ChatEvent {
+  final double progress;
+
+  const DownloadProgressUpdate(this.progress);
+
+  @override
+  List<Object?> get props => [progress];
+}
+
+/// Delete the model file from local storage.
+class DeleteModel extends ChatEvent {
+  const DeleteModel();
+}
+
+/// Refresh the state of model downloading / loading status.
+class RefreshModelStatus extends ChatEvent {
+  const RefreshModelStatus();
+}
+
+/// Index a text document.
+class IndexDocument extends ChatEvent {
+  final String title;
+  final String content;
+
+  const IndexDocument({required this.title, required this.content});
+
+  @override
+  List<Object?> get props => [title, content];
+}
+
+/// Clear all indexed documents in the Vector Store.
+class ClearIndex extends ChatEvent {
+  const ClearIndex();
+}
+

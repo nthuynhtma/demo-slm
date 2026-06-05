@@ -19,6 +19,11 @@ class ModelLoader {
   /// Whether the model is currently loaded and ready for inference.
   bool get isLoaded => _isLoaded;
 
+  /// Check if the model file exists on disk.
+  Future<bool> isModelDownloaded() async {
+    return await _downloader.isModelDownloaded();
+  }
+
   /// Ensure the model is downloaded and loaded.
   ///
   /// If the model is not yet downloaded, it will be fetched first.
@@ -48,6 +53,19 @@ class ModelLoader {
     if (!_isLoaded) return;
     await _inferenceService.dispose();
     _isLoaded = false;
+  }
+
+  /// Delete the model file from disk after unloading it.
+  Future<bool> deleteModel() async {
+    await unloadModel();
+    return await _downloader.deleteModel();
+  }
+
+  /// Download the model file without loading it.
+  Future<String> downloadModel({
+    void Function(double progress)? onProgress,
+  }) async {
+    return await _downloader.downloadModel(onProgress: onProgress);
   }
 
   /// Check device compatibility before loading.

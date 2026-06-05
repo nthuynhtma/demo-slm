@@ -89,6 +89,9 @@ class SlmApp extends StatelessWidget {
       create: (_) => ChatBloc(
         inferenceService: inferenceService,
         modelLoader: modelLoader,
+        documentIndexer: documentIndexer,
+        ragRetriever: ragRetriever,
+        contextBuilder: contextBuilder,
       ),
       child: MaterialApp(
         title: 'SLM Chat',

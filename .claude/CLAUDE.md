@@ -102,22 +102,17 @@ lib/
   - Registrar-based Flutter plugin registration validated
   - `flutter build ios --debug --no-codesign` passed locally after bridge fixes
 
-- [ ] Model download + caching flow
-  - ModelDownloader interface defined
-  - Needs: HTTP download, progress tracking, checksum verification
+- [x] Model download + caching flow ✅
+  - ModelDownloader with resumable download, progress, space checks, and SHA256 verification.
 
-- [ ] Streaming inference pipeline
-  - Native callback/event flow is validated
-  - Need Dart-side buffering, cancellation UX, and final UI streaming polish
+- [x] Streaming inference pipeline ✅
+  - Integrated streaming token delivery, cancellation UX, and animated cursors.
 
-- [ ] RAG pipeline (indexer + retriever)
-  - Text chunker, vector store interfaces defined
-  - Needs: EmbeddingService platform channel (Android/iOS fonnx or LiteRT)
-  - `sqlite_vec` remains a risk because Flutter support is still alpha
+- [x] RAG pipeline (indexer + retriever) ✅
+  - Chunker, VectorStore (in-memory persistent fallback), and Retriever integrated with prompt builder.
 
-- [ ] Chat UI với streaming
-  - ChatBloc structure defined
-  - Needs: UI widgets, message list, input handling
+- [x] Chat UI với streaming ✅
+  - Full ChatBloc state management, chat screen message bubble, and configuration drawer.
 
 - [ ] Performance benchmark
   - First token latency target: < 3s
