@@ -46,8 +46,6 @@ class MockInferenceService implements InferenceService {
       yield words[i];
     }
 
-    // Emit done signal
-    yield '[DONE]';
   }
 
   @override
@@ -84,7 +82,7 @@ class MockInferenceService implements InferenceService {
       return 'Hello! I am Gemma 4, an on-device AI assistant running entirely offline. How can I help you today?';
     }
     if (lower.contains('who are you') || lower.contains('what are you')) {
-      return 'I am a Gemma 4 2B Instruct model, running on your device via LiteRT-LM. I am completely offline and your data stays private on your device.';
+      return 'I am a Gemma 4 E2B Instruct model, running on your device via LiteRT-LM. I am completely offline and your data stays private on your device.';
     }
     if (lower.contains('weather')) {
       return 'I cannot check live weather data because I run entirely offline. However, I can help you understand weather concepts or work with provided reference documents!';
@@ -93,13 +91,13 @@ class MockInferenceService implements InferenceService {
       return 'I can help you with Flutter and Dart development! LiteRT-LM and Gemma 4 support code generation tasks. Feel free to ask me to write Flutter widgets, Dart functions, or explain programming concepts.';
     }
     if (lower.contains('offline') || lower.contains('private') || lower.contains('privacy')) {
-      return 'That is correct! I run fully on-device using LiteRT-LM inference engine and Gemma 4 2B model. No data ever leaves your device. All inference, embeddings, and vector search happen locally. This is great for privacy-sensitive applications.';
+      return 'That is correct! I run fully on-device using LiteRT-LM inference engine and Gemma 4 E2B model. No data ever leaves your device. All inference, embeddings, and vector search happen locally. This is great for privacy-sensitive applications.';
     }
     if (lower.contains('capabilities') || lower.contains('can you') || lower.contains('help')) {
       return 'I can help with: conversation and Q&A, text generation and summarization, code writing and explanation, and working with your documents through RAG (Retrieval Augmented Generation). Just note I run fully offline so I cannot access the internet.';
     }
 
     // Default response
-    return 'That is an interesting question. Based on my on-device knowledge from Gemma 4 2B, I would say that running large language models locally gives you full privacy control and low latency. However, the model size is limited by device hardware. LiteRT-LM optimizes inference using GPU delegates like NNAPI on Android and Core ML on iOS.';
+    return 'That is an interesting question. Based on my on-device knowledge from Gemma 4 E2B, I would say that running large language models locally gives you full privacy control and low latency. However, the model size is limited by device hardware. LiteRT-LM optimizes inference using GPU delegates like NNAPI on Android and Core ML on iOS.';
   }
 }

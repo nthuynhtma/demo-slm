@@ -87,7 +87,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             size: 64, color: Colors.grey),
                         SizedBox(height: 16),
                         Text(
-                          'Start a conversation with\nGemma 4 2B',
+                          'Start a conversation with\nGemma 4 E2B',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.grey, fontSize: 16),
                         ),

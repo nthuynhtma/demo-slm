@@ -25,12 +25,12 @@ void main() {
   // ── Inference ──
   final InferenceService inferenceService = useMock
       ? MockInferenceService()
-      : InferenceChannel() as InferenceService;
+      : InferenceChannel();
 
   // ── RAG: Embedding ──
   final EmbeddingService embeddingService = useMock
       ? MockEmbeddingService()
-      : EmbeddingChannel() as EmbeddingService;
+      : EmbeddingChannel();
 
   // ── RAG: Vector Store ──
   final vectorStore = VectorStore();
@@ -86,7 +86,10 @@ class SlmApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (_) => ChatBloc(inferenceService: inferenceService),
+      create: (_) => ChatBloc(
+        inferenceService: inferenceService,
+        modelLoader: modelLoader,
+      ),
       child: MaterialApp(
         title: 'SLM Chat',
         debugShowCheckedModeBanner: false,

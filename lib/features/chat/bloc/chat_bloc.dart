@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/channels/inference_service.dart';
+import '../../model_manager/loader/model_loader.dart';
 
 import '../models/chat_message.dart';
 import 'chat_event.dart';
@@ -13,11 +14,19 @@ import 'chat_state.dart';
 /// [InferenceService], and processes streaming token updates.
 class ChatBloc extends Bloc<ChatEvent, ChatState> {
   final InferenceService _inferenceService;
+  final ModelLoader _modelLoader;
   final Uuid _uuid = const Uuid();
   StreamSubscription<String>? _inferenceSubscription;
+  static const String _systemPrompt =
+      'You are a helpful offline AI assistant running on-device. '
+      'Answer clearly and use the provided conversation history when relevant.';
 
-  ChatBloc({required InferenceService inferenceService})
+  ChatBloc({
+    required InferenceService inferenceService,
+    required ModelLoader modelLoader,
+  })
     : _inferenceService = inferenceService,
+      _modelLoader = modelLoader,
       super(const ChatState()) {
     on<SendMessage>(_onSendMessage);
     on<StreamToken>(_onStreamToken);
@@ -48,18 +57,31 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       timestamp: DateTime.now(),
       isStreaming: true,
     );
+    final promptMessages = [...state.messages, userMessage];
+    final pendingMessages = [...state.messages, userMessage, assistantMessage];
 
     emit(
       state.copyWith(
-        status: ChatStatus.generating,
-        messages: [...state.messages, userMessage, assistantMessage],
+        status: _modelLoader.isLoaded
+            ? ChatStatus.generating
+            : ChatStatus.loadingModel,
+        messages: pendingMessages,
       ),
     );
 
     try {
+      await _modelLoader.ensureModelLoaded();
+      emit(state.copyWith(
+        status: ChatStatus.generating,
+        messages: pendingMessages,
+        clearError: true,
+      ));
+
+      final prompt = _buildPrompt(promptMessages);
+
       // Subscribe to streaming inference
-      final stream = _inferenceService.generateStream(prompt: event.message);
       await _inferenceSubscription?.cancel();
+      final stream = _inferenceService.generateStream(prompt: prompt);
       _inferenceSubscription = stream.listen(
         (token) {
           add(StreamToken(token));
@@ -74,6 +96,44 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     } catch (e) {
       add(ChatError(e.toString()));
     }
+  }
+
+  /// Build a Gemma chat prompt from the current conversation history.
+  String _buildPrompt(List<ChatMessage> history) {
+    final trimmedHistory = _trimHistory(history);
+    final buf = StringBuffer();
+    buf.write('<start_of_turn>system\n$_systemPrompt<end_of_turn>\n');
+
+    for (final message in trimmedHistory) {
+      if (message.text.trim().isEmpty) continue;
+      final role = switch (message.role) {
+        MessageRole.user => 'user',
+        MessageRole.assistant => 'model',
+        MessageRole.system => 'system',
+      };
+      buf.write('<start_of_turn>$role\n${message.text}<end_of_turn>\n');
+    }
+
+    buf.write('<start_of_turn>model\n');
+    return buf.toString();
+  }
+
+  /// Keep the newest messages that fit inside the target context budget.
+  List<ChatMessage> _trimHistory(
+    List<ChatMessage> history, {
+    int maxTokens = 6000,
+  }) {
+    var totalTokens = 0;
+    final trimmed = <ChatMessage>[];
+
+    for (final message in history.reversed) {
+      final estimatedTokens = (message.text.length / 3.5).ceil();
+      if (totalTokens + estimatedTokens > maxTokens) break;
+      totalTokens += estimatedTokens;
+      trimmed.insert(0, message);
+    }
+
+    return trimmed;
   }
 
   void _onStreamToken(StreamToken event, Emitter<ChatState> emit) {
@@ -107,9 +167,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     emit(state.copyWith(status: ChatStatus.ready, messages: updatedMessages));
   }
 
-  void _onClearChat(ClearChat event, Emitter<ChatState> emit) {
-    _inferenceSubscription?.cancel();
-    _inferenceService.resetSession();
+  Future<void> _onClearChat(ClearChat event, Emitter<ChatState> emit) async {
+    await _inferenceSubscription?.cancel();
+    await _inferenceService.resetSession();
     emit(const ChatState(status: ChatStatus.ready));
   }
 
@@ -132,8 +192,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   }
 
   @override
-  Future<void> close() {
-    _inferenceSubscription?.cancel();
+  Future<void> close() async {
+    await _inferenceSubscription?.cancel();
+    await _modelLoader.unloadModel();
     return super.close();
   }
 }

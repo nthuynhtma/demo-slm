@@ -4,7 +4,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../core/errors/app_exceptions.dart';
 
-/// Handles downloading Gemma 4 2B model files from HuggingFace.
+/// Handles downloading Gemma 4 E2B model files from HuggingFace.
 ///
 /// Supports resumable downloads, progress tracking, and caching.
 class ModelDownloader {
@@ -21,7 +21,7 @@ class ModelDownloader {
   })  : _dio = dio ?? Dio(),
         _secureStorage = secureStorage ?? const FlutterSecureStorage();
 
-  /// Download the model file to the app's documents directory.
+  /// Download the model file to the app's application-support directory.
   ///
   /// Returns the local file path once download is complete.
   /// [onProgress] reports download progress as a fraction (0.0 - 1.0).
@@ -30,7 +30,7 @@ class ModelDownloader {
     void Function(double progress)? onProgress,
   }) async {
     final modelUrl = url ?? defaultModelUrl;
-    final dir = await getApplicationDocumentsDirectory();
+    final dir = await getApplicationSupportDirectory();
     final fileName = 'gemma-4-E2B-it.litertlm';
     final filePath = '${dir.path}/$fileName';
 

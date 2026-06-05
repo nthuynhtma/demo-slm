@@ -99,6 +99,14 @@
   - Preferred embedding runtime: `fonnx`
   - Preferred vector store direction: `sqlite_vec` with alpha-risk fallback plan
 
+## Implementation Sync Notes (2026-06-05)
+
+- Chat flow now ensures the model is loaded before the first generation request
+- `ChatBloc` now builds the Gemma chat template in Dart and includes trimmed conversation history before calling inference
+- `EmbeddingChannel` now implements `EmbeddingService` directly, preventing runtime cast failure when `USE_MOCK=false`
+- `MockInferenceService` should not emit a literal `[DONE]` token because the Dart layer expects stream completion, not a sentinel token, from mock implementations
+- Model download path was aligned to `ApplicationSupport` instead of `Documents`
+
 ## Context Window Notes
 
 Đây là project **research + prototype**, không phải production delivery.

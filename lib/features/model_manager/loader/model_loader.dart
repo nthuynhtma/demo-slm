@@ -29,7 +29,10 @@ class ModelLoader {
     if (_isLoaded) return;
 
     // Step 1: Get or download the model file
-    final modelPath = await _downloader.getCachedModelPath();
+    final hasDownloadedModel = await _downloader.isModelDownloaded();
+    final modelPath = hasDownloadedModel
+        ? await _downloader.getCachedModelPath()
+        : null;
     final path = modelPath ??
         await _downloader.downloadModel(onProgress: onDownloadProgress);
 

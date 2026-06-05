@@ -24,7 +24,8 @@ abstract class InferenceService {
 
   /// Generate a streaming response for [prompt] with generation parameters.
   ///
-  /// [history] contains previous conversation messages for context.
+  /// The caller is responsible for serializing any conversation history
+  /// into [prompt] using the model's chat template.
   /// The returned stream emits partial result tokens.
   Stream<String> generateStream({
     required String prompt,
