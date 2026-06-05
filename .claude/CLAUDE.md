@@ -2,128 +2,186 @@
 
 ## Project Overview
 
-Build a **fully offline AI chatbot** tren Flutter (Android + iOS) su dung:
-- **Inference engine**: LiteRT-LM (Google) — thư viện inference nhẹ cho on-device LLM
-- **Model**: Gemma 4 E2B Instruct (`.litertlm` format cho mobile)
-- **RAG**: Offline hoàn toàn — embeddings local, vector search in-memory/SQLite
-- **Platform**: Android + iOS, muc tieu prototype + feasibility demo
+Build a fully offline AI chatbot in Flutter (Android + iOS) using:
+- **Inference engine**: LiteRT-LM via platform channels
+- **Model**: Gemma 4 E2B Instruct in `.litertlm` format for mobile
+- **RAG**: Fully offline retrieval with local embeddings and vector search
+- **Goal**: Prototype and feasibility demo with a clean migration path to a more disciplined runtime workflow
 
----
+## Architecture Source of Truth
 
-## Architecture (High-Level)
+This document defines the **target architecture** for the application workflow.
+If the current implementation differs, follow this document and the rules under `.claude/rules/`.
 
+### Canonical Workflow
+
+#### App Start
+
+```text
+App Start
+-> Check Model Status + Check Indexed Documents (in parallel)
+-> Model Downloaded?
+-> If not downloaded: prompt download
+-> If downloaded: auto preload model
+-> Ready
 ```
+
+#### User Typing
+
+```text
+User Typing
+-> Preload model if needed
+```
+
+#### Send Message
+
+```text
+Send Message
+-> EnsureModelLoaded
+-> RetrieveContext (optional)
+-> TokenBudgeting
+-> Generate
+-> Batch UI Updates
+-> Finalize Message
+```
+
+#### App Background
+
+```text
+App Background
+-> Release model resources if required
+```
+
+## Architecture Decisions
+
+### 1. Model lifecycle is explicit
+
+Download, preload, ensure-loaded, and release are separate lifecycle stages.
+`EnsureModelLoaded` may load a downloaded model into memory, but it must not trigger a first-time download.
+
+### 2. Startup is orchestrated, not incidental
+
+The app must perform model-status and indexed-document checks as an explicit startup flow.
+Startup decides whether to prompt for download or auto-preload the model before entering the ready state.
+
+### 3. Generation uses a staged pipeline
+
+Message send is a pipeline, not a single monolithic bloc handler:
+- Ensure model loaded
+- Retrieve optional context
+- Apply token budgeting
+- Generate
+- Batch streaming updates for UI efficiency
+- Finalize the assistant message
+
+### 4. Streaming is native-first, UI-batched
+
+Native layers may emit partial tokens at high frequency, but Dart/UI state should coalesce those events into batched updates to reduce rebuild pressure and keep message finalization deterministic.
+
+### 5. Resource release is lifecycle-aware
+
+The app may release LiteRT-LM resources when backgrounded, under memory pressure, or when the owning feature is disposed.
+This policy must be explicit and testable.
+
+### 6. Indexed document status must be trustworthy at startup
+
+If startup reports indexed-document availability, that status must come from durable state.
+An in-memory-only store is acceptable for experimentation, but it must be treated as a temporary limitation rather than the long-term architecture.
+
+## High-Level Component Model
+
+```text
 Flutter UI Layer
     │
     ▼
-ChatBloc (flutter_bloc)
+Chat / App Workflow Coordinator (flutter_bloc)
     │
-    ├──▶ InferenceService (Platform Channel) ──▶ [Native] LiteRT-LM
-    │         • loadModel()
-    │         • generateStream()
-    │         • resetSession()
+    ├── Startup Flow
+    │     • checkModelStatus()
+    │     • checkIndexedDocuments()
+    │     • promptDownloadIfNeeded()
+    │     • autoPreloadIfDownloaded()
     │
-    └──▶ RagService (Dart)
-              • indexDocuments()
-              • retrieveContext()   ──▶ EmbeddingService (Platform Channel)
-              • VectorStore (SQLite / in-memory)
+    ├── Generation Pipeline
+    │     • ensureModelLoaded()
+    │     • retrieveContext()
+    │     • applyTokenBudget()
+    │     • generate()
+    │     • batchUiUpdates()
+    │     • finalizeMessage()
+    │
+    ├── Model Lifecycle Service
+    │     • isModelDownloaded()
+    │     • downloadModel()
+    │     • preloadModel()
+    │     • ensureModelLoaded()
+    │     • releaseModel()
+    │
+    └── RAG Services
+          • indexDocuments()
+          • retrieveContext()
+          • reportIndexedDocumentStatus()
 ```
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
+|-------|------------|
 | UI | Flutter 3.x, flutter_bloc |
-| Inference | LiteRT-LM via Platform Channels |
-| Model | Gemma-4-E2B-it (`.litertlm` cho mobile, `.task` cho web) |
-| Embedding | MiniLM via fonnx / Gemma embedding local |
-| Vector Store | sqlite_vec (preferred, alpha) hoặc in-memory cosine |
-| Storage | flutter_secure_storage, path_provider |
-| Streaming | StreamController → UI |
-
----
+| Inference | LiteRT-LM via platform channels |
+| Model | `litert-community/gemma-4-E2B-it-litert-lm` |
+| Mobile model artifact | `.litertlm` |
+| Web artifact | `.task` |
+| Embedding | MiniLM via `fonnx` or another local embedding runtime |
+| Vector Store | `sqlite_vec` preferred, in-memory fallback only for prototyping |
+| Storage | `flutter_secure_storage`, `path_provider`, durable metadata store as needed |
+| Streaming | Native partials -> batched Dart/UI updates |
 
 ## Key Constraints
 
-- **Model size**: Gemma 4 E2B ~2.6GB; phải hỗ trợ download on-demand + cache
-- **Memory**: Cần ít nhất 4GB RAM trên device; graceful degradation nếu thiếu
-- **iOS**: LiteRT-LM dùng Core ML delegate; cần Metal support
-- **Android**: NNAPI delegate ưu tiên; fallback CPU
-- **No network**: Sau khi download model, app hoạt động 100% offline
-- **Context window**: Gemma 4 E2B ~8K tokens; cần quản lý history cẩn thận
+- **Model size**: Gemma 4 E2B is about 2.6 GB and requires resumable download plus caching.
+- **Memory**: Devices need enough RAM to load and run the model; the app must release resources when appropriate.
+- **No silent first-use download**: Missing models must trigger an explicit download prompt rather than being downloaded inside the send flow.
+- **Offline requirement**: After the model and embeddings are present locally, inference and retrieval stay on-device.
+- **Context window**: Gemma 4 E2B has an approximately 8K token window, so history, retrieved context, and response headroom must be budgeted together.
+- **Platform constraints**: Android prefers NNAPI with CPU fallback; iOS uses Core ML where available.
 
----
+## Project Structure
 
-## Project Structure (Flutter)
-
-```
+```text
 lib/
 ├── core/
 │   ├── channels/
-│   │   ├── inference_channel.dart     # Platform channel wrapper
-│   │   └── embedding_channel.dart
 │   └── errors/
 ├── features/
 │   ├── chat/
-│   │   ├── bloc/
-│   │   ├── models/
-│   │   └── screens/
 │   ├── model_manager/
-│   │   ├── download/
-│   │   └── loader/
 │   └── rag/
-│       ├── indexer/
-│       ├── retriever/
-│       └── vector_store/
-├── native/
-│   ├── android/                       # Kotlin bridge
-│   └── ios/                           # Swift bridge
+└── native/
+    ├── android/
+    └── ios/
 ```
 
----
+The current codebase may still keep startup, lifecycle, and generation concerns inside `ChatBloc`.
+That is acceptable during migration, but the behavior must move toward the workflow defined above.
 
-## Current Status (June 5, 2026)
+## Documentation Baseline
 
-- [x] LiteRT-LM Flutter integration research ✅ 
-  - Confirmed: LiteRT-LM 0.10.35 API
-  - Model: Gemma 4 E2B Instruct (`.litertlm` cho mobile)
-  - Source: `litert-community/gemma-4-E2B-it-litert-lm`
-  - Android native bridge working
-  - iOS native API shape validated from installed pod headers
-  
-- [x] Platform Channel bridge (Android Kotlin) ✅
-  - InferencePlugin.kt implemented & built successfully
-  - Uses `LlmInference.generateResponseAsync(prompt)` → `ListenableFuture<String>`
-  - EventChannel for token streaming to Dart
-  - Methods: loadModel, startGeneration, cancelGeneration, resetSession, getModelInfo
-
-- [x] Platform Channel bridge (iOS Swift) ✅
-  - Session-based generation aligned with `MediaPipeTasksGenAI 0.10.35`
-  - Registrar-based Flutter plugin registration validated
-  - `flutter build ios --debug --no-codesign` passed locally after bridge fixes
-
-- [x] Model download + caching flow ✅
-  - ModelDownloader with resumable download, progress, space checks, and SHA256 verification.
-
-- [x] Streaming inference pipeline ✅
-  - Integrated streaming token delivery, cancellation UX, and animated cursors.
-
-- [x] RAG pipeline (indexer + retriever) ✅
-  - Chunker, VectorStore (in-memory persistent fallback), and Retriever integrated with prompt builder.
-
-- [x] Chat UI với streaming ✅
-  - Full ChatBloc state management, chat screen message bubble, and configuration drawer.
-
-- [ ] Performance benchmark
-  - First token latency target: < 3s
-  - Throughput target: > 8 tokens/s
+- The mobile source-of-truth model format is `.litertlm`.
+- The preferred Hugging Face repo is `litert-community/gemma-4-E2B-it-litert-lm`.
+- iOS uses session-based generation for `MediaPipeTasksGenAI 0.10.35`.
+- Startup, typing preload, generation staging, streaming batching, and background release are now first-class architecture decisions.
+- Documentation may lead implementation during this migration; implementation changes should align to docs in a phased manner.
 
 ## Related Files
 
-- `rules/inference.md` — chi tiết LiteRT-LM API, Platform Channel patterns
-- `rules/rag.md` — RAG architecture, embedding, vector search
-- `rules/flutter-patterns.md` — coding conventions, bloc patterns
-- `rules/android-setup.md` / `rules/ios-setup.md` — platform setup chi tiet
-- `agents/researcher.md` — agent nghiên cứu feasibility
-- `skills/model-loader.md` — tái sử dụng model download logic
-- `skills/ios-litert-bridge.md` — reusable fix pattern cho iOS bridge
+- `rules/model-lifecycle.md`
+- `rules/startup-flow.md`
+- `rules/generation-pipeline.md`
+- `rules/streaming-updates.md`
+- `rules/resource-management.md`
+- `rules/inference.md`
+- `rules/rag.md`
+- `rules/flutter-patterns.md`
+- `skills/model-loader.md`
+- `skills/ios-litert-bridge.md`

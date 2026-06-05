@@ -14,6 +14,91 @@
 | 2026-06 | **Băm SHA256 dạng stream để tránh OOM** | Tránh lỗi tràn bộ nhớ (OOM) khi băm file model nặng 2.6GB trên thiết bị di động |
 | 2026-06 | **Resumable download qua Dio Range** | Hỗ trợ tải tiếp tục model 2.6GB bằng HTTP Range header để tăng độ ổn định |
 
+## ADR-2026-06-05 — Explicit Model Lifecycle and Staged Generation Pipeline
+
+### Status
+
+Accepted as the documentation source of truth. Implementation migration is approved and proceeds in phases.
+
+### Context
+
+The earlier implementation path mixed multiple responsibilities together:
+- first-use download could happen inside `ensureModelLoaded()`
+- startup only refreshed state and did not auto-preload a downloaded model
+- send-message flow did not formalize token budgeting as its own stage
+- streaming updates were pushed token-by-token directly into UI state
+- background lifecycle did not explicitly release model resources
+- indexed-document availability at startup was not durable because the current vector store is in-memory
+
+This made the app work for a prototype, but it weakened predictability, lifecycle clarity, and memory discipline.
+
+### Decision
+
+The app now adopts the following target workflow:
+
+```text
+App Start
+-> Check Model Status + Check Indexed Documents (in parallel)
+-> If model not downloaded: prompt download
+-> If model downloaded: auto preload model
+-> Ready
+
+User Typing
+-> Preload model if needed
+
+Send Message
+-> EnsureModelLoaded
+-> RetrieveContext (optional)
+-> TokenBudgeting
+-> Generate
+-> Batch UI Updates
+-> Finalize Message
+
+App Background
+-> Release model resources if required
+```
+
+### Architectural Consequences
+
+1. **Download and load are separate concerns**
+   - Download is an explicit user-visible action.
+   - Load/preload is a memory lifecycle action.
+   - `EnsureModelLoaded` must not silently perform the first download.
+
+2. **Startup becomes a first-class flow**
+   - Startup must orchestrate model and indexed-document checks in parallel.
+   - Startup chooses between a download prompt and auto-preload before the app is considered ready.
+
+3. **Generation becomes pipeline-driven**
+   - Retrieval, token budgeting, generation, streaming aggregation, and finalization are separate stages.
+   - History and retrieved context must share a single token budget with reserved response headroom.
+
+4. **Streaming becomes UI-batched**
+   - Native partials may arrive per token.
+   - Dart/UI updates should be coalesced into batches for better rendering efficiency and cleaner state transitions.
+
+5. **Lifecycle and memory management become explicit**
+   - Backgrounding may release native model resources.
+   - Release policy must be deterministic enough to test and reason about.
+
+6. **Indexed-document status must be durable if shown at startup**
+   - In-memory-only document state is now considered a temporary prototype limitation, not the target design.
+
+### Migration Strategy
+
+- Update top-level docs and rules first.
+- Refactor startup flow and model lifecycle boundaries second.
+- Introduce the staged generation pipeline next.
+- Add background-release behavior and streaming batching after the lifecycle split is stable.
+- Address durable indexed-document status as part of the retrieval/storage migration.
+
+### Guardrails
+
+- Do not regress the explicit download CTA for missing models.
+- Do not hide a large download behind send-message actions.
+- Do not release resources in a way that loses confirmed user-visible message state.
+- Do not claim startup document availability unless the backing state survives app restart.
+
 ## Open Questions — Research Results (2026-06)
 
 ### ✅ LiteRT-LM streaming via EventChannel

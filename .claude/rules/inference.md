@@ -1,22 +1,33 @@
 # rules/inference.md — LiteRT-LM Integration
 
-## LiteRT-LM Overview
+## Overview
 
-LiteRT-LM là thư viện Google cho on-device LLM inference, kế thừa từ MediaPipe LLM Inference API.
+LiteRT-LM is the on-device inference engine for this project.
 
-**Model format**: `.litertlm` cho mobile, `.task` cho web
-**Source**: Hugging Face — `litert-community/gemma-4-E2B-it-litert-lm`
+- **Mobile artifact**: `.litertlm`
+- **Web artifact**: `.task`
+- **Preferred source**: `litert-community/gemma-4-E2B-it-litert-lm`
+- **Pinned iOS SDK family**: `MediaPipeTasksGenAI 0.10.35`
 
----
+This rule defines the platform-channel contract and how native streaming integrates with the higher-level generation pipeline.
+
+## Lifecycle Boundary
+
+Inference is responsible for **loading, generating, cancelling, resetting, and releasing** native model resources.
+Inference is **not** responsible for deciding when to download a model or whether startup should prompt the user.
+
+Required boundary:
+- startup flow decides whether the model should be downloaded or preloaded
+- model lifecycle service decides whether the model is downloaded and when to load/release it
+- inference service only acts on an already available local model path
 
 ## Platform Channel Design
 
-### Channel Names (giữ consistent)
+### Channel Names
 
 ```dart
-// Dart side
 const _inferenceChannel = MethodChannel('com.app.offline_chat/inference');
-const _inferenceEvents   = EventChannel('com.app.offline_chat/inference_stream');
+const _inferenceEvents = EventChannel('com.app.offline_chat/inference_stream');
 ```
 
 ### Dart API Contract
@@ -24,7 +35,12 @@ const _inferenceEvents   = EventChannel('com.app.offline_chat/inference_stream')
 ```dart
 abstract class InferenceService {
   Future<void> loadModel(String modelPath);
-  Stream<String> generateStream(List<Message> history, String prompt);
+  Stream<String> generateStream({
+    required String prompt,
+    int maxTokens = 1024,
+    double temperature = 0.7,
+  });
+  Future<void> cancelGeneration();
   Future<void> resetSession();
   Future<void> dispose();
   Future<ModelInfo> getModelInfo();
@@ -39,133 +55,38 @@ abstract class InferenceService {
 | `startGeneration` | `{prompt: String, maxTokens: int, temp: double}` | `void` |
 | `cancelGeneration` | - | `void` |
 | `resetSession` | - | `void` |
+| `dispose` | - | `void` |
 | `getModelInfo` | - | `{name, size, contextLen}` |
 
-Streaming tokens qua **EventChannel** — mỗi event là 1 token string.
+### Streaming Contract
 
----
+- Native code may emit partial results at token or sub-token cadence.
+- The event channel carries raw partial text events plus a terminal completion signal.
+- Dart may batch UI updates, but it must preserve token order.
+- Completion, cancellation, and errors must flush any buffered partial text before final state transition.
 
-## Android (Kotlin) Bridge
+## Generation Pipeline Integration
 
-```kotlin
-// android/app/src/main/kotlin/.../InferencePlugin.kt
-class InferencePlugin(private val context: Context) :
-    MethodCallHandler, EventChannel.StreamHandler {
+Inference participates only in the `Generate` stage of the application pipeline:
 
-    private var llmInference: LlmInference? = null
-    private var eventSink: EventChannel.EventSink? = null
-
-    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        when (call.method) {
-            "loadModel" -> {
-                val path = call.argument<String>("path")!!
-                val options = LlmInference.LlmInferenceOptions.builder()
-                    .setModelPath(path)
-                    .setMaxTokens(1024)
-                    .setResultListener { partial, done ->
-                        mainHandler.post {
-                            eventSink?.success(partial)
-                            if (done) eventSink?.success("[DONE]")
-                        }
-                    }
-                    .build()
-                llmInference = LlmInference.createFromOptions(context, options)
-                result.success(null)
-            }
-            "startGeneration" -> {
-                val prompt = call.argument<String>("prompt")!!
-                llmInference?.generateResponseAsync(prompt)
-                result.success(null)
-            }
-            "resetSession" -> {
-                // LiteRT-LM không có built-in session reset
-                // → reload model hoặc manage context manually
-                result.success(null)
-            }
-        }
-    }
-}
+```text
+EnsureModelLoaded
+-> RetrieveContext (optional)
+-> TokenBudgeting
+-> Generate
+-> Batch UI Updates
+-> Finalize Message
 ```
 
-**Dependency** (android/app/build.gradle):
-```gradle
-implementation 'com.google.mediapipe:tasks-genai:0.10.35'
-```
+The pipeline must satisfy these constraints:
+- `loadModel()` must happen before `generateStream()`
+- token budgeting happens before generation starts
+- prompt serialization happens before generation starts
+- UI batching happens after inference emits partials
 
----
+## Prompt Template
 
-## iOS (Swift) Bridge
-
-```swift
-// ios/Runner/InferencePlugin.swift
-class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
-
-    private var llmInference: LlmInference?
-    private var currentSession: LlmInference.Session?
-    private var eventSink: FlutterEventSink?
-
-    static func register(with registrar: FlutterPluginRegistrar) {
-        let instance = InferencePlugin(messenger: registrar.messenger())
-        registrar.addMethodCallDelegate(instance, channel: instance.methodChannel)
-        instance.eventChannel.setStreamHandler(instance)
-    }
-
-    func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-        switch call.method {
-        case "loadModel":
-            let args = call.arguments as! [String: Any]
-            let path = args["path"] as! String
-            let options = LlmInference.Options(modelPath: path)
-            options.maxTokens = 1024
-            options.maxTopk = 40
-            llmInference = try? LlmInference(options: options)
-            result(nil)
-        case "startGeneration":
-            let args = call.arguments as! [String: Any]
-            let prompt = args["prompt"] as! String
-            let temperature = Float((args["temp"] as? Double) ?? 0.7)
-
-            let sessionOptions = LlmInference.Session.Options()
-            sessionOptions.temperature = temperature
-            sessionOptions.topk = 40
-
-            let session = try! LlmInference.Session(llmInference: llmInference!, options: sessionOptions)
-            try! session.addQueryChunk(inputText: prompt)
-            currentSession = session
-
-            try! session.generateResponseAsync(progress: { [weak self] partial, error in
-                DispatchQueue.main.async {
-                    if let partial { self?.eventSink?(partial) }
-                }
-            }, completion: { [weak self] in
-                DispatchQueue.main.async {
-                    self?.currentSession = nil
-                    self?.eventSink?("[DONE]")
-                }
-            })
-            result(nil)
-        default:
-            result(FlutterMethodNotImplemented)
-        }
-    }
-}
-```
-
-**SDK note (important)**:
-- Với `MediaPipeTasksGenAI 0.10.35`, Swift bridge phải dùng **session-based generation**
-- `temperature/topk/topp` nằm ở `LlmInference.Session.Options`, không nằm ở `LlmInference.Options`
-- Async API dùng **2 callbacks riêng**: `progress` và `completion`
-- `FlutterPlugin` conformance trên iOS yêu cầu `register(with registrar: FlutterPluginRegistrar)`
-
-**Podfile**:
-```ruby
-pod 'MediaPipeTasksGenAI', '~> 0.10'
-pod 'MediaPipeTasksGenAIC', '~> 0.10'
-```
-
----
-
-## Prompt Template (Gemma 4 Instruct)
+Gemma 4 Instruct chat template:
 
 ```dart
 String buildPrompt(List<Message> history, String systemPrompt) {
@@ -180,55 +101,56 @@ String buildPrompt(List<Message> history, String systemPrompt) {
 }
 ```
 
----
+## Token Budgeting Requirements
 
-## Context Window Management
+- Gemma 4 E2B supports an approximately 8192-token context window.
+- Budget conversation history, retrieved context, and response headroom together.
+- Do not rely on history trimming alone if RAG context is also injected.
+- Prefer a dedicated budget allocator over ad hoc per-stage limits.
 
-- Gemma 4 E2B: **8192 tokens** context window
-- Giữ tối đa **~6000 tokens** để có room cho response
-- Strategy: **sliding window** — drop oldest messages, luôn giữ system prompt
+Recommended budgeting model:
+- reserve response headroom first
+- reserve fixed system-prompt cost
+- cap retrieved context allocation
+- fit remaining history using a sliding window
 
-```dart
-List<Message> trimHistory(List<Message> history, {int maxTokens = 6000}) {
-  // Ước lượng: 1 token ≈ 4 chars (tiếng Anh), 3 chars (tiếng Việt)
-  var total = 0;
-  final result = <Message>[];
-  for (final msg in history.reversed) {
-    total += (msg.content.length / 3.5).ceil();
-    if (total > maxTokens) break;
-    result.insert(0, msg);
-  }
-  return result;
-}
-```
+## Android Guidance
 
----
+- Use `com.google.mediapipe:tasks-genai:0.10.35`
+- Post listener callbacks back to the main thread before writing to `eventSink`
+- Ensure cancellation does not emit stale partials after the user stops generation
+- Ensure `dispose` releases the native inference instance
+
+## iOS Guidance
+
+- Use session-based generation for `temperature/topk/topp`
+- Register via `FlutterPluginRegistrar`
+- Use `generateResponseAsync(progress:completion:)`
+- Dispatch `eventSink` writes back to the main thread
+- Release session references when generation completes, errors, or is cancelled
 
 ## Error Handling
 
 | Error | Handling |
 |-------|----------|
-| Model file not found | Show download prompt |
-| OOM (OutOfMemoryError) | Graceful error + suggest restart |
-| Generation timeout (>60s) | Cancel + notify user |
-| Corrupt model file | Delete + re-download |
-
----
+| Model file missing | Surface download prompt via startup or send guard |
+| Model load failure | Set error state and keep app recoverable |
+| OOM / memory pressure | Release resources if possible and surface actionable error |
+| Generation timeout | Cancel generation and finalize buffered text safely |
+| Corrupt model file | Delete cache and require re-download |
 
 ## Performance Targets
 
 | Metric | Target |
 |--------|--------|
-| Model load time | < 5s (cold), < 1s (warm) |
+| Model load time | < 5s cold, < 1s warm |
 | First token latency | < 3s |
-| Throughput | > 8 tokens/s (Android mid-range) |
-| Memory footprint | < 3GB RAM |
+| Throughput | > 8 tokens/s on a mid-range Android device |
+| Memory footprint | Keep active model usage within device constraints |
 
----
+## Validated Notes
 
-## Validated Notes (2026-06-05)
-
-- Mobile target file format is `.litertlm`; do not use `.task` as the primary mobile artifact
-- Android can emit partial updates via listener, but callback delivery is not guaranteed on the main thread
-- iOS `MediaPipeTasksGenAI 0.10.35` requires session-based generation for `temperature/topk/topp`
-- If a higher-priority doc disagrees with older examples, prefer validated findings from installed SDK headers and successful local builds
+- Mobile target file format is `.litertlm`
+- Android callback delivery is not guaranteed on the main thread
+- iOS `MediaPipeTasksGenAI 0.10.35` requires session-based generation
+- If a higher-priority doc disagrees with an older example, follow the newer architecture docs plus validated SDK findings

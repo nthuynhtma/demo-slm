@@ -2,61 +2,107 @@
 
 ## State Management
 
-Dùng **flutter_bloc** (Bloc/Cubit). Không dùng Provider hay Riverpod trong project này.
+Use `flutter_bloc`. Do not introduce Provider or Riverpod for this project.
 
-```
-ChatBloc         → quản lý messages, loading, streaming, error
-ModelBloc        → model download/loading state  
-RagBloc          → index documents, retrieval status
-SettingsCubit    → temperature, max tokens, system prompt
+```text
+App / Chat Workflow Bloc  -> startup flow, lifecycle, generation pipeline
+Model Lifecycle Service   -> download status, preload, ensure-loaded, release
+RAG Services              -> indexing, retrieval, document status
+Settings State            -> temperature, max tokens, system prompt
 ```
 
-## Bloc Pattern — Chat
+## Architecture Pattern
+
+Prefer a **coordinator + service boundary**:
+- bloc/coordinator owns user-facing state transitions
+- services own side effects and domain operations
+- platform channel wrappers stay thin
+
+Avoid a single handler that combines:
+- startup checks
+- implicit download
+- model load
+- retrieval
+- token budgeting
+- streaming accumulation
+- finalization
+
+These should be represented as explicit stages.
+
+## Startup Flow Pattern
+
+Startup should be event-driven and explicit:
 
 ```dart
-// State
-@freezed
-class ChatState with _$ChatState {
-  const factory ChatState({
-    @Default([]) List<Message> messages,
-    @Default(false) bool isGenerating,
-    @Default(false) bool isModelLoaded,
-    String? streamingBuffer,   // token đang stream
-    AppError? error,
-  }) = _ChatState;
-}
-
-// Events
-abstract class ChatEvent {}
-class SendMessage extends ChatEvent { final String text; }
-class TokenReceived extends ChatEvent { final String token; }
-class GenerationDone extends ChatEvent {}
-class ClearHistory extends ChatEvent {}
+abstract class AppEvent {}
+class StartupRequested extends AppEvent {}
+class StartupChecksCompleted extends AppEvent {}
+class DownloadPromptConfirmed extends AppEvent {}
+class PreloadRequested extends AppEvent {}
 ```
+
+Recommended startup states:
+- checking startup
+- needs download
+- preloading
+- ready
+- error
+
+Run model-status and indexed-document checks in parallel when possible.
+
+## Generation Pipeline Pattern
+
+Treat send-message as a staged pipeline:
+
+```text
+SendMessage
+-> EnsureModelLoaded
+-> RetrieveContext (optional)
+-> TokenBudgeting
+-> Generate
+-> Batch UI Updates
+-> Finalize Message
+```
+
+Each stage should have one clear responsibility and be easy to test independently.
 
 ## Streaming UI Pattern
 
-```dart
-// Dùng StreamBuilder wrap bubble cuối
-StreamBuilder<String>(
-  stream: _chatCubit.tokenStream,
-  builder: (context, snapshot) {
-    return ChatBubble(
-      text: state.messages.last.content + (snapshot.data ?? ''),
-      isStreaming: true,
-    );
-  },
-)
-```
+Do not rebuild the entire UI for every raw token if batching is available.
+Prefer a short-lived buffer that flushes partial text on:
+- a timer tick
+- a size threshold
+- completion
+- cancellation
+- error
+
+Recommended rule:
+- native emits raw partials
+- bloc accumulates into a transient buffer
+- bloc commits coalesced text into message state
+- finalization flushes any remainder
+
+## Lifecycle Pattern
+
+Widgets or coordinators that own model-heavy features should observe app lifecycle where required:
+- preload after successful startup when appropriate
+- optionally warm the model while typing
+- release resources on background if policy requires it
+
+Lifecycle behavior must not discard already committed message text.
 
 ## Error Handling Convention
 
+Wrap platform and domain failures in user-meaningful states.
+Do not expose raw `PlatformException` directly to UI widgets.
+
 ```dart
-// Dùng sealed class cho domain errors
 sealed class InferenceError {
   const InferenceError();
 }
-class ModelNotLoaded extends InferenceError {}
+
+class ModelMissing extends InferenceError {}
+class ModelLoadFailed extends InferenceError {}
 class OutOfMemory extends InferenceError {}
 class GenerationTimeout extends InferenceError {}
 class ModelCorrupted extends InferenceError {}
@@ -64,100 +110,42 @@ class ModelCorrupted extends InferenceError {}
 
 ## Platform Channel Conventions
 
-- Tất cả Platform Channel calls wrap trong try/catch PlatformException
-- Throw domain-specific exceptions, không expose PlatformException ra UI
-- Channel methods đều async, không block UI thread
+- Wrap calls in `try/catch PlatformException`
+- Translate into domain-specific errors
+- Keep methods asynchronous
+- Keep wrappers transport-focused rather than orchestration-focused
 
-```dart
-// Wrapper pattern
-class InferenceChannelImpl implements InferenceService {
-  static const _channel = MethodChannel('com.app.offline_chat/inference');
+## File and Folder Naming
 
-  @override
-  Future<void> loadModel(String path) async {
-    try {
-      await _channel.invokeMethod('loadModel', {'path': path});
-    } on PlatformException catch (e) {
-      if (e.code == 'MODEL_NOT_FOUND') throw ModelNotLoaded();
-      if (e.code == 'OOM') throw OutOfMemory();
-      rethrow;
-    }
-  }
-}
-```
-
-## File & Folder Naming
-
-```
+```text
 features/chat/
   ├── bloc/
-  │   ├── chat_bloc.dart
-  │   ├── chat_event.dart
-  │   └── chat_state.dart
   ├── models/
-  │   └── message.dart
   ├── widgets/
-  │   ├── chat_bubble.dart
-  │   ├── message_input.dart
-  │   └── streaming_indicator.dart
   └── screens/
-      └── chat_screen.dart
+
+features/model_manager/
+  ├── download/
+  ├── loader/
+  └── lifecycle/
+
+features/rag/
+  ├── indexer/
+  ├── retriever/
+  └── vector_store/
 ```
+
+The exact migration shape can remain incremental, but names should reflect domain responsibility.
 
 ## Dependency Injection
 
-Dùng `get_it` + `injectable`.
-
-```dart
-@singleton
-class InferenceService { ... }
-
-@singleton
-class RagRetriever { ... }
-
-@injectable  // per-use, not singleton
-class ChatBloc { ... }
-```
-
-## Key Dependencies
-
-```yaml
-dependencies:
-  flutter_bloc: ^8.x
-  freezed_annotation: ^2.x
-  get_it: ^7.x
-  injectable: ^2.x
-  sqlite_async: ^0.x
-  sqlite_vec: ^0.x
-  file_picker: ^6.x
-  path_provider: ^2.x
-  dio: ^5.x             # model download với progress
-  crypto: ^3.x          # checksum verification
-
-dev_dependencies:
-  freezed: ^2.x
-  injectable_generator: ^2.x
-  build_runner: ^2.x
-  flutter_test:
-    sdk: flutter
-```
+`get_it` + `injectable` remains the preferred direction when dependency registration becomes large enough to justify it.
 
 ## Mock-First Development
 
-```dart
-// Dùng dart-define để switch mock/real
-// flutter run --dart-define=USE_MOCK=true
+Use `--dart-define=USE_MOCK=true` when validating UI and flow behavior without the native model.
 
-@injectable
-@Environment('mock')
-class MockInferenceService implements InferenceService {
-  @override
-  Stream<String> generateStream(List<Message> history, String prompt) async* {
-    final response = 'Đây là response mock cho: "$prompt"';
-    for (final word in response.split(' ')) {
-      yield '$word ';
-      await Future.delayed(const Duration(milliseconds: 80));
-    }
-  }
-}
-```
+Mocks should respect the architecture contract:
+- mock startup should emulate downloaded vs missing model branches
+- mock inference should require `loadModel()` before generation
+- mock streaming should behave like raw partials, not pre-batched UI text
