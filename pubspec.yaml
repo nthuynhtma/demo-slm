@@ -1,0 +1,35 @@
+name: slm_app
+description: "Offline AI Chatbot using LiteRT-LM + Gemma 4 2B"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI & State Management
+  cupertino_icons: ^1.0.8
+  flutter_bloc: ^9.1.0
+
+  # Local Storage
+  path_provider: ^2.1.5
+  flutter_secure_storage: ^9.2.4
+  sqflite: ^2.4.2
+
+  # Networking (Model Download)
+  dio: ^5.7.0
+
+  # Utilities
+  equatable: ^2.0.7
+  uuid: ^4.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
