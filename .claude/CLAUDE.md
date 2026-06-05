@@ -82,16 +82,42 @@ lib/
 
 ---
 
-## Current Status
+## Current Status (June 5, 2026)
 
-- [ ] LiteRT-LM Flutter integration research
-- [ ] Platform Channel bridge (Android Kotlin)
+- [x] LiteRT-LM Flutter integration research ✅ 
+  - Confirmed: LiteRT-LM 0.10.22+ API (ListenableFuture pattern)
+  - Model: Gemma 4 2B Instruct (`.task` format)
+  - Android native bridge working
+  
+- [x] Platform Channel bridge (Android Kotlin) ✅
+  - InferencePlugin.kt implemented & built successfully
+  - Uses `LlmInference.generateResponseAsync(prompt)` → `ListenableFuture<String>`
+  - EventChannel for token streaming to Dart
+  - Methods: loadModel, startGeneration, cancelGeneration, resetSession, getModelInfo
+
 - [ ] Platform Channel bridge (iOS Swift)
+  - InferencePlugin.swift stub created (needs completion)
+  - API: LiteRT-LM iOS SDK via MediaPipeTasksGenAI pod
+
 - [ ] Model download + caching flow
+  - ModelDownloader interface defined
+  - Needs: HTTP download, progress tracking, checksum verification
+
 - [ ] Streaming inference pipeline
+  - Android: Full response via ListenableFuture, needs token-level streaming
+  - Need to implement word-level splitting for UI streaming effect
+
 - [ ] RAG pipeline (indexer + retriever)
+  - Text chunker, vector store interfaces defined
+  - Needs: EmbeddingService platform channel (Android/iOS ONNX or LiteRT)
+
 - [ ] Chat UI với streaming
+  - ChatBloc structure defined
+  - Needs: UI widgets, message list, input handling
+
 - [ ] Performance benchmark
+  - First token latency target: < 3s
+  - Throughput target: > 8 tokens/s
 
 ## Related Files
 

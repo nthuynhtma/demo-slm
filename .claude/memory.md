@@ -50,6 +50,7 @@
 
 ## Gotchas Discovered
 
+- **Android LiteRT-LM API**: `generateResponseAsync(prompt)` returns `ListenableFuture<String>` (not `ListenableFuture<ProgressListener>`), must call `.addListener()` to get result
 - LiteRT-LM callback KHÔNG chạy trên main thread → phải post về main thread trước khi update eventSink
 - Gemma chat template dùng `<start_of_turn>` / `<end_of_turn>`, không phải `[INST]` hay `<|user|>`
 - **Model Gemma 4 E2B không bị gated trên `litert-community` repo** (Apache 2.0), nhưng repo gốc `google/gemma-4-E2B-it` có thể gated
@@ -58,7 +59,7 @@
 - `sqlite_vec` Flutter package rất alpha (0.1.7-alpha.3) → cần fallback plan
 - LiteRT-LM 0.10.x dùng **`.litertlm`** format mới, không còn `.task` cho mobile (`.task` chỉ dành cho Web)
 - Gemma 4 E2B dùng **SentencePiece**, không phải tiktoken
-- iOS không support background streaming → cần save session state khi app进入 background
+- iOS không support background streaming → cần save session state khi app vào background
 
 ## Context Window Notes
 
