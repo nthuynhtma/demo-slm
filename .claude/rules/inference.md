@@ -4,8 +4,8 @@
 
 LiteRT-LM là thư viện Google cho on-device LLM inference, kế thừa từ MediaPipe LLM Inference API.
 
-**Model format**: `.task` bundle (tokenizer + weights gói chung)
-**Source**: Hugging Face — `google/gemma-4-2b-it-litert-lm` (hoặc `Gemma-4-E2B-it-litert-lm`)
+**Model format**: `.litertlm` cho mobile, `.task` cho web
+**Source**: Hugging Face — `litert-community/gemma-4-E2B-it-litert-lm`
 
 ---
 
@@ -89,7 +89,7 @@ class InferencePlugin(private val context: Context) :
 
 **Dependency** (android/app/build.gradle):
 ```gradle
-implementation 'com.google.mediapipe:tasks-genai:0.10.x'
+implementation 'com.google.mediapipe:tasks-genai:0.10.35'
 ```
 
 ---
@@ -184,7 +184,7 @@ String buildPrompt(List<Message> history, String systemPrompt) {
 
 ## Context Window Management
 
-- Gemma 4 2B: **8192 tokens** context window
+- Gemma 4 E2B: **8192 tokens** context window
 - Giữ tối đa **~6000 tokens** để có room cho response
 - Strategy: **sliding window** — drop oldest messages, luôn giữ system prompt
 
@@ -223,3 +223,12 @@ List<Message> trimHistory(List<Message> history, {int maxTokens = 6000}) {
 | First token latency | < 3s |
 | Throughput | > 8 tokens/s (Android mid-range) |
 | Memory footprint | < 3GB RAM |
+
+---
+
+## Validated Notes (2026-06-05)
+
+- Mobile target file format is `.litertlm`; do not use `.task` as the primary mobile artifact
+- Android can emit partial updates via listener, but callback delivery is not guaranteed on the main thread
+- iOS `MediaPipeTasksGenAI 0.10.35` requires session-based generation for `temperature/topk/topp`
+- If a higher-priority doc disagrees with older examples, prefer validated findings from installed SDK headers and successful local builds

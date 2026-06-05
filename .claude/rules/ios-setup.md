@@ -218,11 +218,11 @@ Tuy nhiên nếu model lưu trong Documents (user-accessible):
 // Dart side — lấy đúng path cho iOS
 Future<String> getModelPath() async {
   final dir = await getApplicationSupportDirectory(); // NOT Documents
-  return '${dir.path}/gemma-4-2b-it.task';
+  return '${dir.path}/gemma-4-E2B-it.litertlm';
 }
 ```
 
-> ⚠️ Dùng `ApplicationSupport`, không dùng `Documents` — tránh iCloud backup model file 2GB+
+> ⚠️ Dùng `ApplicationSupport`, không dùng `Documents` — tránh iCloud backup model file ~2.6GB
 
 Thêm vào `Info.plist` để exclude khỏi backup:
 ```swift

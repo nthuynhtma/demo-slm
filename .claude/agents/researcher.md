@@ -19,16 +19,16 @@ Dùng agent này khi cần:
 ### LiteRT-LM Flutter Integration
 
 - [ ] `com.google.mediapipe:tasks-genai` — latest stable version?
-- [ ] Minimum Android API level? (hiện tại: API 24+)
+- [ ] Minimum Android API level? (hiện tại: API 26+)
 - [ ] iOS minimum deployment target? (hiện tại: iOS 16+)
 - [ ] EventChannel streaming support trong tasks-genai?
 - [ ] `LlmInference.generateResponseAsync` callback thread safety?
 - [ ] GPU delegate availability: Android NNAPI, iOS Core ML
-- [ ] Model file format: `.task` bundle vs raw weights
+- [ ] Model file format: `.litertlm` cho mobile vs `.task` cho web
 
-### Gemma 4 2B Model
+### Gemma 4 E2B Model
 
-- [ ] HuggingFace repo: `google/gemma-4-2b-it-litert-lm` tồn tại không?
+- [ ] HuggingFace repo: `litert-community/gemma-4-E2B-it-litert-lm` còn đúng không?
 - [ ] Model size sau quantization (INT4/INT8)?
 - [ ] Tokenizer: SentencePiece hay tiktoken?
 - [ ] Special tokens cho chat template (`<start_of_turn>`, `<end_of_turn>`)?
@@ -37,7 +37,7 @@ Dùng agent này khi cần:
 ### RAG Stack
 
 - [ ] `sqlite_vec` Flutter support (Android + iOS)?
-- [ ] ONNX Runtime Flutter plugin: `onnxruntime_flutter` — active maintenance?
+- [ ] `fonnx` — còn là ONNX runtime Flutter option active nhất?
 - [ ] MiniLM ONNX model size và accuracy benchmark?
 - [ ] Alternative: `flutter_tflite` cho embedding model?
 

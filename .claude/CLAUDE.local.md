@@ -14,8 +14,8 @@ ANDROID_TARGET=physical  # physical | emulator
 ## HuggingFace Token
 
 ```
-# Cần để download Gemma (gated model)
-HF_TOKEN=hf_xxxxxxxxxxxxx  # điền token của bạn
+# Optional: repo mobile hiện tại không gated, chỉ cần nếu sau này dùng repo gated khác
+HF_TOKEN=hf_xxxxxxxxxxxxx  # điền token của bạn nếu cần
 ```
 
 ## Test Devices

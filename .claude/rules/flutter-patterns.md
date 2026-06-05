@@ -5,9 +5,9 @@
 Dùng **flutter_bloc** (Bloc/Cubit). Không dùng Provider hay Riverpod trong project này.
 
 ```
-ChatCubit        → quản lý messages, loading, error
-ModelCubit       → model download/loading state  
-RagCubit         → index documents, retrieval status
+ChatBloc         → quản lý messages, loading, streaming, error
+ModelBloc        → model download/loading state  
+RagBloc          → index documents, retrieval status
 SettingsCubit    → temperature, max tokens, system prompt
 ```
 
@@ -71,7 +71,7 @@ class ModelCorrupted extends InferenceError {}
 ```dart
 // Wrapper pattern
 class InferenceChannelImpl implements InferenceService {
-  static const _channel = MethodChannel('com.app/inference');
+  static const _channel = MethodChannel('com.app.offline_chat/inference');
 
   @override
   Future<void> loadModel(String path) async {

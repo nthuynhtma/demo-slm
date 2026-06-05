@@ -25,13 +25,13 @@ android {
 
     // Cần cho LiteRT native libs
     aaptOptions {
-        noCompress "task", "bin"  // không nén model file
+        noCompress "litertlm", "bin"  // không nén model file mobile
     }
 }
 
 dependencies {
     // MediaPipe GenAI (LiteRT-LM)
-    implementation 'com.google.mediapipe:tasks-genai:0.10.22'
+    implementation 'com.google.mediapipe:tasks-genai:0.10.35'
 
     // Coroutines cho async
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
@@ -96,7 +96,7 @@ class InferencePlugin(private val context: Context) :
             }
             "getModelInfo" -> {
                 result.success(mapOf(
-                    "name" to "Gemma 4 2B Instruct",
+                    "name" to "Gemma 4 E2B Instruct",
                     "contextLength" to 8192
                 ))
             }
@@ -223,7 +223,7 @@ class MainActivity : FlutterActivity() {
 // Dart side
 Future<String> getModelPath() async {
   final dir = await getApplicationSupportDirectory();
-  return '${dir.path}/gemma-4-2b-it.task';
+  return '${dir.path}/gemma-4-E2B-it.litertlm';
 }
 ```
 

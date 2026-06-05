@@ -78,15 +78,15 @@ class DownloadProgress {
 }
 ```
 
-## Gemma 4 2B Model Info
+## Gemma 4 E2B Model Info
 
 ```dart
-const kGemma4_2B = ModelConfig(
-  name: 'Gemma 4 2B Instruct',
-  fileName: 'gemma-4-2b-it.task',
-  // URL từ HuggingFace (cần token nếu gated)
-  downloadUrl: 'https://huggingface.co/google/gemma-4-2b-it-litert-lm/resolve/main/gemma-4-2b-it.task',
-  sizeBytes: 2_200_000_000,  // ~2.2GB (estimate)
+const kGemma4E2B = ModelConfig(
+  name: 'Gemma 4 E2B Instruct',
+  fileName: 'gemma-4-E2B-it.litertlm',
+  // Mobile artifact từ HuggingFace (repo hiện tại không gated)
+  downloadUrl: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm',
+  sizeBytes: 2_580_000_000,  // ~2.58GB
   sha256: 'TODO_FILL_AFTER_DOWNLOAD',
   contextLength: 8192,
   dimensions: null,  // không dùng cho inference model
@@ -98,14 +98,15 @@ const kGemma4_2B = ModelConfig(
 ```dart
 class ModelDownloadButton extends StatelessWidget {
   // Hiển thị:
-  // - "Tải model (~2.2GB)" nếu chưa có
-  // - LinearProgressIndicator + "45% - 1.2GB/2.2GB" khi đang tải
+  // - "Tải model (~2.6GB)" nếu chưa có
+  // - LinearProgressIndicator + "45% - 1.2GB/2.6GB" khi đang tải
   // - "Đã sẵn sàng ✓" nếu có rồi
 }
 ```
 
 ## Notes
 
-- **HuggingFace gated models**: cần user login + accept terms → redirect browser
-- **Storage check**: verify device có đủ 3GB free trước khi download
+- **Current Gemma mobile repo**: `litert-community/gemma-4-E2B-it-litert-lm` hiện không gated
+- **Format**: dùng `.litertlm` cho mobile; `.task` chỉ relevant nếu làm web
+- **Storage check**: verify device có đủ >3GB free trước khi download
 - **WiFi only option**: check ConnectivityResult trước khi bắt đầu

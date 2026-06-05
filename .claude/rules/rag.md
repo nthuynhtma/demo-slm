@@ -30,7 +30,7 @@ Document Input (PDF, TXT, MD)
 
 ### Option A: MiniLM via ONNX (Recommended)
 - Model: `all-MiniLM-L6-v2` (~22MB, 384-dim vectors)
-- Run qua ONNX Runtime Flutter plugin
+- Run qua `fonnx`
 - **Pros**: nhẹ, nhanh, chất lượng tốt cho tiếng Anh
 - **Cons**: tiếng Việt trung bình
 
@@ -76,6 +76,9 @@ class Chunk {
 
 ## Vector Store (sqlite_vec)
 
+`sqlite_vec` là lựa chọn ưu tiên vì lightweight và không cần server, nhưng Flutter package hiện vẫn khá alpha.
+Luôn giữ fallback plan: in-memory cosine similarity nếu integration không ổn định.
+
 ### Setup
 
 ```yaml
@@ -83,6 +86,7 @@ class Chunk {
 dependencies:
   sqlite_async: ^0.x.x
   sqlite_vec: ^0.x.x        # SQLite vector extension
+  fonnx: ^0.x.x             # ONNX runtime Flutter package được maintain tốt hơn
 ```
 
 ### Schema
@@ -234,3 +238,8 @@ Future<String> _buildRagPrompt(String userMessage) async {
 | 1000 chunks × 384-dim float32 | ~1.5MB |
 | SQLite DB (text + metadata) | ~5MB per 100 docs |
 | Total RAG overhead | < 30MB |
+
+## Validated Notes (2026-06-05)
+
+- Preferred embedding runtime is `fonnx`, not `onnxruntime_flutter`
+- `sqlite_vec` should be treated as an alpha dependency until the Flutter integration is proven stable on both Android and iOS

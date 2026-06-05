@@ -1,12 +1,12 @@
-# CLAUDE.md — Offline Chat Flutter (LiteRT-LM + Gemma 4 2B)
+# CLAUDE.md — Offline Chat Flutter (LiteRT-LM + Gemma 4 E2B)
 
 ## Project Overview
 
-Build a **fully offline AI chatbot** trên Flutter (Android + iOS) sử dụng:
+Build a **fully offline AI chatbot** tren Flutter (Android + iOS) su dung:
 - **Inference engine**: LiteRT-LM (Google) — thư viện inference nhẹ cho on-device LLM
-- **Model**: Gemma 4 2B Instruct (`.task` format từ LiteRT-LM)
+- **Model**: Gemma 4 E2B Instruct (`.litertlm` format cho mobile)
 - **RAG**: Offline hoàn toàn — embeddings local, vector search in-memory/SQLite
-- **Platform**: Android + iOS, production-ready
+- **Platform**: Android + iOS, muc tieu prototype + feasibility demo
 
 ---
 
@@ -35,9 +35,9 @@ ChatBloc (flutter_bloc)
 |-------|-----------|
 | UI | Flutter 3.x, flutter_bloc |
 | Inference | LiteRT-LM via Platform Channels |
-| Model | Gemma-4-2B-it (`.task` hoặc `.bin`) |
-| Embedding | MiniLM / Gemma embedding local |
-| Vector Store | sqlite_vec hoặc in-memory cosine |
+| Model | Gemma-4-E2B-it (`.litertlm` cho mobile, `.task` cho web) |
+| Embedding | MiniLM via fonnx / Gemma embedding local |
+| Vector Store | sqlite_vec (preferred, alpha) hoặc in-memory cosine |
 | Storage | flutter_secure_storage, path_provider |
 | Streaming | StreamController → UI |
 
@@ -45,12 +45,12 @@ ChatBloc (flutter_bloc)
 
 ## Key Constraints
 
-- **Model size**: Gemma 4 2B ~2–3GB; phải hỗ trợ download on-demand + cache
+- **Model size**: Gemma 4 E2B ~2.6GB; phải hỗ trợ download on-demand + cache
 - **Memory**: Cần ít nhất 4GB RAM trên device; graceful degradation nếu thiếu
 - **iOS**: LiteRT-LM dùng Core ML delegate; cần Metal support
 - **Android**: NNAPI delegate ưu tiên; fallback CPU
 - **No network**: Sau khi download model, app hoạt động 100% offline
-- **Context window**: Gemma 4 2B ~8K tokens; cần quản lý history cẩn thận
+- **Context window**: Gemma 4 E2B ~8K tokens; cần quản lý history cẩn thận
 
 ---
 
@@ -85,9 +85,11 @@ lib/
 ## Current Status (June 5, 2026)
 
 - [x] LiteRT-LM Flutter integration research ✅ 
-  - Confirmed: LiteRT-LM 0.10.22+ API (ListenableFuture pattern)
-  - Model: Gemma 4 2B Instruct (`.task` format)
+  - Confirmed: LiteRT-LM 0.10.35 API
+  - Model: Gemma 4 E2B Instruct (`.litertlm` cho mobile)
+  - Source: `litert-community/gemma-4-E2B-it-litert-lm`
   - Android native bridge working
+  - iOS native API shape validated from installed pod headers
   
 - [x] Platform Channel bridge (Android Kotlin) ✅
   - InferencePlugin.kt implemented & built successfully
@@ -95,21 +97,23 @@ lib/
   - EventChannel for token streaming to Dart
   - Methods: loadModel, startGeneration, cancelGeneration, resetSession, getModelInfo
 
-- [ ] Platform Channel bridge (iOS Swift)
-  - InferencePlugin.swift stub created (needs completion)
-  - API: LiteRT-LM iOS SDK via MediaPipeTasksGenAI pod
+- [x] Platform Channel bridge (iOS Swift) ✅
+  - Session-based generation aligned with `MediaPipeTasksGenAI 0.10.35`
+  - Registrar-based Flutter plugin registration validated
+  - `flutter build ios --debug --no-codesign` passed locally after bridge fixes
 
 - [ ] Model download + caching flow
   - ModelDownloader interface defined
   - Needs: HTTP download, progress tracking, checksum verification
 
 - [ ] Streaming inference pipeline
-  - Android: Full response via ListenableFuture, needs token-level streaming
-  - Need to implement word-level splitting for UI streaming effect
+  - Native callback/event flow is validated
+  - Need Dart-side buffering, cancellation UX, and final UI streaming polish
 
 - [ ] RAG pipeline (indexer + retriever)
   - Text chunker, vector store interfaces defined
-  - Needs: EmbeddingService platform channel (Android/iOS ONNX or LiteRT)
+  - Needs: EmbeddingService platform channel (Android/iOS fonnx or LiteRT)
+  - `sqlite_vec` remains a risk because Flutter support is still alpha
 
 - [ ] Chat UI với streaming
   - ChatBloc structure defined
@@ -124,5 +128,7 @@ lib/
 - `rules/inference.md` — chi tiết LiteRT-LM API, Platform Channel patterns
 - `rules/rag.md` — RAG architecture, embedding, vector search
 - `rules/flutter-patterns.md` — coding conventions, bloc patterns
+- `rules/android-setup.md` / `rules/ios-setup.md` — platform setup chi tiet
 - `agents/researcher.md` — agent nghiên cứu feasibility
 - `skills/model-loader.md` — tái sử dụng model download logic
+- `skills/ios-litert-bridge.md` — reusable fix pattern cho iOS bridge
