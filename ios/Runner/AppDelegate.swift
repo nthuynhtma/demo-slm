@@ -7,10 +7,10 @@ import Flutter
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    let controller = window?.rootViewController as! FlutterViewController
-
     // Đăng ký InferencePlugin cho LiteRT-LM
-    InferencePlugin.register(with: controller.binaryMessenger)
+    if let registrar = registrar(forPlugin: "InferencePlugin") {
+      InferencePlugin.register(with: registrar)
+    }
 
     GeneratedPluginRegistrant.register(with: self)
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)

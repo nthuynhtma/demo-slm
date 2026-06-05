@@ -38,10 +38,10 @@ import Flutter
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    let controller = window?.rootViewController as! FlutterViewController
-
     // Đăng ký InferencePlugin
-    InferencePlugin.register(with: controller.binaryMessenger)
+    if let registrar = registrar(forPlugin: "InferencePlugin") {
+      InferencePlugin.register(with: registrar)
+    }
 
     GeneratedPluginRegistrant.register(with: self)
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
@@ -59,17 +59,17 @@ import Flutter
 import MediaPipeTasksGenAI
 
 class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
-
-  // MARK: - Properties
   private var llmInference: LlmInference?
+  private var currentSession: LlmInference.Session?
   private var eventSink: FlutterEventSink?
   private let methodChannel: FlutterMethodChannel
   private let eventChannel: FlutterEventChannel
+  private var currentModelPath: String?
+  private var isCancelled = false
 
-  // MARK: - Registration
-  static func register(with messenger: FlutterBinaryMessenger) {
-    let instance = InferencePlugin(messenger: messenger)
-    instance.methodChannel.setMethodCallHandler(instance.handle)
+  static func register(with registrar: FlutterPluginRegistrar) {
+    let instance = InferencePlugin(messenger: registrar.messenger())
+    registrar.addMethodCallDelegate(instance, channel: instance.methodChannel)
     instance.eventChannel.setStreamHandler(instance)
   }
 
@@ -85,94 +85,69 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     super.init()
   }
 
-  // MARK: - Method Handler
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
-
     case "loadModel":
-      guard let args = call.arguments as? [String: Any],
-            let path = args["path"] as? String else {
-        result(FlutterError(code: "INVALID_ARGS", message: "path required", details: nil))
-        return
-      }
-      loadModel(path: path, result: result)
+      let path = (call.arguments as? [String: Any])?["path"] as? String
+      loadModel(path: path ?? "", result: result)
 
     case "startGeneration":
-      guard let args = call.arguments as? [String: Any],
-            let prompt = args["prompt"] as? String else {
-        result(FlutterError(code: "INVALID_ARGS", message: "prompt required", details: nil))
-        return
-      }
-      startGeneration(prompt: prompt, result: result)
-
-    case "cancelGeneration":
-      // LiteRT-LM iOS chưa có cancel API → set flag để ignore tokens
-      isCancelled = true
-      result(nil)
-
-    case "resetSession":
-      // Reload model để reset KV cache
-      if let path = currentModelPath {
-        loadModel(path: path, result: result)
-      } else {
-        result(nil)
-      }
-
-    case "getModelInfo":
-      result([
-        "name": "Gemma 4 2B Instruct",
-        "contextLength": 8192
-      ])
+      let args = call.arguments as? [String: Any]
+      let prompt = args?["prompt"] as? String ?? ""
+      let temperature = (args?["temp"] as? Double) ?? 0.7
+      startGeneration(prompt: prompt, temperature: temperature, result: result)
 
     default:
       result(FlutterMethodNotImplemented)
     }
   }
 
-  // MARK: - Private
-  private var currentModelPath: String?
-  private var isCancelled = false
-
   private func loadModel(path: String, result: @escaping FlutterResult) {
     DispatchQueue.global(qos: .userInitiated).async {
       do {
         let options = LlmInference.Options(modelPath: path)
         options.maxTokens = 1024
-        options.temperature = 0.8
-        options.topK = 40
+        options.maxTopk = 40
 
         self.llmInference = try LlmInference(options: options)
         self.currentModelPath = path
-
         DispatchQueue.main.async { result(nil) }
       } catch {
         DispatchQueue.main.async {
-          result(FlutterError(
-            code: "LOAD_FAILED",
-            message: error.localizedDescription,
-            details: nil
-          ))
+          result(FlutterError(code: "LOAD_FAILED", message: error.localizedDescription, details: nil))
         }
       }
     }
   }
 
-  private func startGeneration(prompt: String, result: @escaping FlutterResult) {
+  private func startGeneration(
+    prompt: String,
+    temperature: Double,
+    result: @escaping FlutterResult
+  ) {
     guard let inference = llmInference else {
       result(FlutterError(code: "MODEL_NOT_LOADED", message: "Call loadModel first", details: nil))
       return
     }
 
     isCancelled = false
-    result(nil)  // acknowledge segera
+    result(nil)
 
     DispatchQueue.global(qos: .userInitiated).async {
       do {
-        try inference.generateResponseAsync(inputText: prompt) { [weak self] partialResult, error, done in
-          guard let self = self, !self.isCancelled else { return }
+        let sessionOptions = LlmInference.Session.Options()
+        sessionOptions.temperature = Float(temperature)
+        sessionOptions.topk = 40
 
+        let session = try LlmInference.Session(llmInference: inference, options: sessionOptions)
+        try session.addQueryChunk(inputText: prompt)
+        self.currentSession = session
+
+        try session.generateResponseAsync(progress: { [weak self] partial, error in
+          guard let self = self, !self.isCancelled else { return }
           DispatchQueue.main.async {
             if let error = error {
+              self.currentSession = nil
               self.eventSink?(FlutterError(
                 code: "GENERATION_ERROR",
                 message: error.localizedDescription,
@@ -180,14 +155,17 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
               ))
               return
             }
-            if let token = partialResult {
-              self.eventSink?(token)
-            }
-            if done {
-              self.eventSink?("[DONE]")
+            if let partial = partial {
+              self.eventSink?(partial)
             }
           }
-        }
+        }, completion: { [weak self] in
+          guard let self = self, !self.isCancelled else { return }
+          DispatchQueue.main.async {
+            self.currentSession = nil
+            self.eventSink?("[DONE]")
+          }
+        })
       } catch {
         DispatchQueue.main.async {
           self.eventSink?(FlutterError(
@@ -200,7 +178,6 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
   }
 
-  // MARK: - FlutterStreamHandler
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     self.eventSink = events
     return nil
@@ -208,11 +185,15 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
     isCancelled = true
-    self.eventSink = nil
+    currentSession = nil
+    eventSink = nil
     return nil
   }
 }
 ```
+
+> ⚠️ Với `MediaPipeTasksGenAI 0.10.35`, `temperature` không nằm trong `LlmInference.Options`.
+> Nó nằm trong `LlmInference.Session.Options`, và async generation cần `progress` + `completion`.
 
 ---
 

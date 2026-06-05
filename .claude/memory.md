@@ -10,6 +10,7 @@
 | 2026-06 | flutter_bloc | Consistent với codebase TMA hiện tại |
 | 2026-06 | **fonnx** cho ONNX runtime thay vì onnxruntime_flutter | fonnx actively maintained (last push 2026-05-22), onnxruntime_flutter stalled since Dec 2024 |
 | 2026-06 | **LiteRT-LM 0.10.35** là target version | Latest stable (April 2026), hỗ trợ streaming callback đầy đủ |
+| 2026-06 | **iOS bridge dùng `LlmInference.Session` cho generation settings** | Với MediaPipeTasksGenAI 0.10.35, `temperature/topk` nằm ở session options, không nằm ở engine options |
 
 ## Open Questions — Research Results (2026-06)
 
@@ -19,6 +20,14 @@
 - iOS dùng `AsyncSequence` (Swift async stream)
 - EventChannel Flutter có thể bridge được, nhưng **cần post callback về main thread** trước khi gọi `eventSink.success()`
 - Litert-LM version hiện tại: **0.10.35** (April 2026)
+
+### ✅ iOS MediaPipeTasksGenAI 0.10.35 bridge API
+- **Status**: ✅ Confirmed from installed pod headers + successful local build
+- `LlmInference.Options` chỉ giữ engine-level config như `modelPath`, `maxTokens`, `maxTopk`
+- `temperature`, `topk`, `topp` nằm trong `LlmInference.Session.Options`
+- Async generation signature là `generateResponseAsync(progress: completion:)`
+- Progress callback nhận `(String?, Error?)`, completion callback không có tham số
+- Flutter iOS plugin conformance yêu cầu `register(with registrar: FlutterPluginRegistrar)`, không phải `register(with messenger: FlutterBinaryMessenger)`
 
 ### ✅ Gemma 4 2B `.task` file availability
 - **Status**: ✅ Confirmed
@@ -60,6 +69,8 @@
 - LiteRT-LM 0.10.x dùng **`.litertlm`** format mới, không còn `.task` cho mobile (`.task` chỉ dành cho Web)
 - Gemma 4 E2B dùng **SentencePiece**, không phải tiktoken
 - iOS không support background streaming → cần save session state khi app vào background
+- iOS sample code cũ trong rules có thể bị outdated: SDK 0.10.35 không còn callback `(partial, error, done)` cho Swift
+- `flutter build ios --debug --no-codesign` đã pass sau khi sửa iOS bridge theo registrar API + session-based generation
 
 ## Context Window Notes
 

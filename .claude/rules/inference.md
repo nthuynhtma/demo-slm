@@ -101,7 +101,14 @@ implementation 'com.google.mediapipe:tasks-genai:0.10.x'
 class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
     private var llmInference: LlmInference?
+    private var currentSession: LlmInference.Session?
     private var eventSink: FlutterEventSink?
+
+    static func register(with registrar: FlutterPluginRegistrar) {
+        let instance = InferencePlugin(messenger: registrar.messenger())
+        registrar.addMethodCallDelegate(instance, channel: instance.methodChannel)
+        instance.eventChannel.setStreamHandler(instance)
+    }
 
     func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
@@ -110,17 +117,32 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
             let path = args["path"] as! String
             let options = LlmInference.Options(modelPath: path)
             options.maxTokens = 1024
+            options.maxTopk = 40
             llmInference = try? LlmInference(options: options)
             result(nil)
         case "startGeneration":
             let args = call.arguments as! [String: Any]
             let prompt = args["prompt"] as! String
-            llmInference?.generateResponseAsync(inputText: prompt) { [weak self] partial, error, done in
+            let temperature = Float((args["temp"] as? Double) ?? 0.7)
+
+            let sessionOptions = LlmInference.Session.Options()
+            sessionOptions.temperature = temperature
+            sessionOptions.topk = 40
+
+            let session = try! LlmInference.Session(llmInference: llmInference!, options: sessionOptions)
+            try! session.addQueryChunk(inputText: prompt)
+            currentSession = session
+
+            try! session.generateResponseAsync(progress: { [weak self] partial, error in
                 DispatchQueue.main.async {
-                    self?.eventSink?(partial ?? "")
-                    if done { self?.eventSink?("[DONE]") }
+                    if let partial { self?.eventSink?(partial) }
                 }
-            }
+            }, completion: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.currentSession = nil
+                    self?.eventSink?("[DONE]")
+                }
+            })
             result(nil)
         default:
             result(FlutterMethodNotImplemented)
@@ -128,6 +150,12 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
 }
 ```
+
+**SDK note (important)**:
+- Với `MediaPipeTasksGenAI 0.10.35`, Swift bridge phải dùng **session-based generation**
+- `temperature/topk/topp` nằm ở `LlmInference.Session.Options`, không nằm ở `LlmInference.Options`
+- Async API dùng **2 callbacks riêng**: `progress` và `completion`
+- `FlutterPlugin` conformance trên iOS yêu cầu `register(with registrar: FlutterPluginRegistrar)`
 
 **Podfile**:
 ```ruby

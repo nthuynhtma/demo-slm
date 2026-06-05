@@ -21,8 +21,9 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private let eventChannel: FlutterEventChannel
 
     // Thread-safe properties using unfair lock
-    private let lock = os_unfair_lock()
+    private var lock = os_unfair_lock()
     private var _llmInference: LlmInference?
+    private var _currentSession: LlmInference.Session?
     private var _eventSink: FlutterEventSink?
     private var _currentModelPath: String?
     private var _isCancelled = false
@@ -37,6 +38,11 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         set { os_unfair_lock_lock(&lock); _eventSink = newValue; os_unfair_lock_unlock(&lock) }
     }
 
+    private var currentSession: LlmInference.Session? {
+        get { os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }; return _currentSession }
+        set { os_unfair_lock_lock(&lock); _currentSession = newValue; os_unfair_lock_unlock(&lock) }
+    }
+
     private var currentModelPath: String? {
         get { os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }; return _currentModelPath }
         set { os_unfair_lock_lock(&lock); _currentModelPath = newValue; os_unfair_lock_unlock(&lock) }
@@ -48,10 +54,15 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     }
 
     // MARK: - Registration
-    static func register(with messenger: FlutterBinaryMessenger) {
-        let instance = InferencePlugin(messenger: messenger)
-        instance.methodChannel.setMethodCallHandler(instance.handle)
+    static func register(with registrar: FlutterPluginRegistrar) {
+        let instance = InferencePlugin(messenger: registrar.messenger())
+        registrar.addMethodCallDelegate(instance, channel: instance.methodChannel)
         instance.eventChannel.setStreamHandler(instance)
+        registrar.publish(instance)
+    }
+
+    /// Required by FlutterPlugin protocol for plugin bundling
+    static func dummyMethodToEnforceBundling() {
     }
 
     init(messenger: FlutterBinaryMessenger) {
@@ -84,11 +95,14 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 result(FlutterError(code: "INVALID_ARGS", message: "prompt required", details: nil))
                 return
             }
-            startGeneration(prompt: prompt, result: result)
+            let maxTokens = args["maxTokens"] as? Int ?? 1024
+            let temperature = args["temp"] as? Double ?? 0.7
+            startGeneration(prompt: prompt, maxTokens: maxTokens, temperature: temperature, result: result)
 
         case "cancelGeneration":
             // LiteRT-LM iOS chưa có cancel API → set flag để ignore tokens
             isCancelled = true
+            currentSession = nil
             result(nil)
 
         case "resetSession":
@@ -119,12 +133,12 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 // Close existing inference instance trước khi tạo mới
+                self.currentSession = nil
                 self.llmInference = nil
 
                 let options = LlmInference.Options(modelPath: path)
                 options.maxTokens = 1024
-                options.temperature = 0.8
-                options.topK = 40
+                options.maxTopk = 40
 
                 self.llmInference = try LlmInference(options: options)
                 self.currentModelPath = path
@@ -142,39 +156,64 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         }
     }
 
-    private func startGeneration(prompt: String, result: @escaping FlutterResult) {
+    /// Starts a new session-based generation using the installed MediaPipeTasksGenAI 0.10.35 API.
+    private func startGeneration(
+        prompt: String,
+        maxTokens: Int,
+        temperature: Double,
+        result: @escaping FlutterResult
+    ) {
         guard let inference = llmInference else {
             result(FlutterError(code: "MODEL_NOT_LOADED", message: "Call loadModel first", details: nil))
             return
         }
 
         isCancelled = false
+        currentSession = nil
         result(nil) // acknowledge immediately
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try inference.generateResponseAsync(inputText: prompt) { [weak self] partialResult, error, done in
-                    guard let self = self, !self.isCancelled else { return }
+                let sessionOptions = LlmInference.Session.Options()
+                sessionOptions.temperature = Float(temperature)
+                sessionOptions.topk = 40
+                let session = try LlmInference.Session(llmInference: inference, options: sessionOptions)
+                try session.addQueryChunk(inputText: prompt)
+                self.currentSession = session
 
-                    DispatchQueue.main.async {
-                        if let error = error {
-                            self.eventSink?(FlutterError(
-                                code: "GENERATION_ERROR",
-                                message: error.localizedDescription,
-                                details: nil
-                            ))
-                            return
+                // maxTokens is currently configured at engine creation time on iOS.
+                _ = maxTokens
+
+                try session.generateResponseAsync(
+                    progress: { [weak self] partialResult, error in
+                        guard let self = self, !self.isCancelled else { return }
+
+                        DispatchQueue.main.async {
+                            if let error = error {
+                                self.currentSession = nil
+                                self.eventSink?(FlutterError(
+                                    code: "GENERATION_ERROR",
+                                    message: error.localizedDescription,
+                                    details: nil
+                                ))
+                                return
+                            }
+                            if let token = partialResult {
+                                self.eventSink?(token)
+                            }
                         }
-                        if let token = partialResult {
-                            self.eventSink?(token)
-                        }
-                        if done {
+                    },
+                    completion: { [weak self] in
+                        guard let self = self, !self.isCancelled else { return }
+                        DispatchQueue.main.async {
+                            self.currentSession = nil
                             self.eventSink?("[DONE]")
                         }
                     }
-                }
+                )
             } catch {
                 DispatchQueue.main.async {
+                    self.currentSession = nil
                     self.eventSink?(FlutterError(
                         code: "GENERATION_FAILED",
                         message: error.localizedDescription,
@@ -193,11 +232,13 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
     func onCancel(withArguments arguments: Any?) -> FlutterError? {
         isCancelled = true
+        currentSession = nil
         self.eventSink = nil
         return nil
     }
 
     func dispose() {
+        currentSession = nil
         llmInference = nil
         eventSink = nil
         currentModelPath = nil
