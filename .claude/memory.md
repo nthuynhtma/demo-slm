@@ -114,6 +114,10 @@
 - **Cải tiến ModelDownloader**: Hỗ trợ Range headers để tiếp tục tải khi đứt mạng, kiểm tra bộ nhớ trống (>3.0GB), và kiểm tra checksum SHA256 dạng stream an toàn cho RAM.
 - **Nâng cấp UI Material 3**: RAG toggle, model status chip, bảng điều khiển cấu hình model/RAG dạng Drawer, và tích hợp các tài liệu mẫu để kiểm thử nhanh.
 - **Vượt qua các bài kiểm thử**: Tạo file `test/rag_chat_test.dart` và sửa lỗi test biên dịch. Toàn bộ test suite chạy thành công.
+- **Preload model explicit**: `ChatBloc` có `PreloadModel` event để load model vào memory mà không gửi message giả như `hello`; nút "Load Model" trong Drawer giờ gọi preload flow thật.
+- **Cancel generation end-to-end**: `ChatBloc` có `CancelGeneration` event, nút gửi trong UI đổi thành nút stop khi đang stream, và phần text assistant đã stream dở sẽ được giữ lại thay vì bị mất.
+- **Kiểm thử tập trung cho control flow mới**: Đã thêm test cho preload model và cancel generation; cả hai đều pass khi chạy riêng bằng `flutter test --plain-name ...`.
+- **Rủi ro test hiện tại**: Chạy toàn bộ `test/rag_chat_test.dart` vẫn có dấu hiệu treo ở đường đi `IndexDocument event updates document count`, nên cần điều tra riêng luồng indexing/test async này trước khi coi file test đó là fully stable.
 
 ## Context Window Notes
 
