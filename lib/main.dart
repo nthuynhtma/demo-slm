@@ -20,7 +20,7 @@ void main() {
 
   // Use --dart-define=USE_MOCK=true to run with mock services
   // Use --dart-define=USE_MOCK=false (or omit) for real device with LiteRT-LM
-  const bool useMock = bool.fromEnvironment('USE_MOCK', defaultValue: true);
+  const bool useMock = bool.fromEnvironment('USE_MOCK', defaultValue: false);
 
   // ── Inference ──
   final InferenceService inferenceService = useMock

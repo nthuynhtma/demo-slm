@@ -86,7 +86,9 @@ class _ChatScreenState extends State<ChatScreen> {
               final title = titleController.text.trim();
               final content = contentController.text.trim();
               if (title.isNotEmpty && content.isNotEmpty) {
-                context.read<ChatBloc>().add(IndexDocument(title: title, content: content));
+                context.read<ChatBloc>().add(
+                  IndexDocument(title: title, content: content),
+                );
                 Navigator.pop(dialogContext);
               }
             },
@@ -116,6 +118,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (state.isDownloading) {
                   statusText = 'Downloading';
                   statusColor = Colors.orange;
+                } else if (state.status == ChatStatus.loadingModel) {
+                  statusText = 'Loading';
+                  statusColor = Colors.deepPurple;
                 } else if (state.isModelLoaded) {
                   statusText = 'Ready';
                   statusColor = Colors.green;
@@ -125,11 +130,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
 
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: statusColor.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: statusColor.withValues(alpha: 0.3)),
+                    border: Border.all(
+                      color: statusColor.withValues(alpha: 0.3),
+                    ),
                   ),
                   child: Text(
                     statusText,
@@ -155,7 +165,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   label: Row(
                     children: [
                       Icon(
-                        ragActive ? Icons.psychology : Icons.psychology_outlined,
+                        ragActive
+                            ? Icons.psychology
+                            : Icons.psychology_outlined,
                         size: 16,
                         color: ragActive ? Colors.white : Colors.grey,
                       ),
@@ -198,10 +210,15 @@ class _ChatScreenState extends State<ChatScreen> {
           // Indexing progress banner
           BlocBuilder<ChatBloc, ChatState>(
             builder: (context, state) {
-              if (state.indexingProgress == null) return const SizedBox.shrink();
+              if (state.indexingProgress == null) {
+                return const SizedBox.shrink();
+              }
               return Container(
                 color: Theme.of(context).colorScheme.primaryContainer,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 child: Row(
                   children: [
                     const SizedBox(
@@ -215,7 +232,9 @@ class _ChatScreenState extends State<ChatScreen> {
                         'Indexing document... ${(state.indexingProgress! * 100).toStringAsFixed(0)}%',
                         style: TextStyle(
                           fontSize: 13,
-                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onPrimaryContainer,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -233,7 +252,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (state.status == ChatStatus.generating) {
                   _scrollToBottom();
                 }
-                if (state.status == ChatStatus.error && state.errorMessage != null) {
+                if (state.status == ChatStatus.error &&
+                    state.errorMessage != null) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(state.errorMessage!),
@@ -251,7 +271,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         Container(
                           padding: const EdgeInsets.all(20),
                           decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.2),
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primaryContainer
+                                .withValues(alpha: 0.2),
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
@@ -264,7 +287,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         Text(
                           'Start a conversation with\nGemma 4 E2B',
                           textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
                                 color: Colors.grey,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -274,7 +298,10 @@ class _ChatScreenState extends State<ChatScreen> {
                           state.useRag
                               ? 'RAG Mode Active (${state.documentCount} docs indexed)'
                               : 'Standard Mode. Open config (tune icon) to set up RAG.',
-                          style: const TextStyle(color: Colors.grey, fontSize: 12),
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                     ),
@@ -286,9 +313,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   padding: const EdgeInsets.all(16),
                   itemCount: state.messages.length,
                   itemBuilder: (context, index) {
-                    return _MessageBubble(
-                      message: state.messages[index],
-                    );
+                    return _MessageBubble(message: state.messages[index]);
                   },
                 );
               },
@@ -333,16 +358,27 @@ class _ChatScreenState extends State<ChatScreen> {
                   const SizedBox(width: 8),
                   BlocBuilder<ChatBloc, ChatState>(
                     builder: (context, state) {
-                      final isGenerating = state.status == ChatStatus.generating;
-                      final isLoadingModel = state.status == ChatStatus.loadingModel;
+                      final isGenerating =
+                          state.status == ChatStatus.generating;
+                      final isLoadingModel =
+                          state.status == ChatStatus.loadingModel;
+                      final canSend = !isGenerating && !isLoadingModel;
                       return CircleAvatar(
                         radius: 24,
-                        backgroundColor: isGenerating || isLoadingModel
-                            ? Colors.grey[200]
-                            : Theme.of(context).colorScheme.primary,
+                        backgroundColor: canSend
+                            ? Theme.of(context).colorScheme.primary
+                            : (isGenerating
+                                  ? Theme.of(context).colorScheme.errorContainer
+                                  : Colors.grey[200]),
                         child: IconButton(
-                          onPressed: isGenerating || isLoadingModel ? null : _onSend,
-                          icon: isGenerating || isLoadingModel
+                          onPressed: isGenerating
+                              ? () {
+                                  context.read<ChatBloc>().add(
+                                    const CancelGeneration(),
+                                  );
+                                }
+                              : (isLoadingModel ? null : _onSend),
+                          icon: isLoadingModel
                               ? const SizedBox(
                                   width: 20,
                                   height: 20,
@@ -350,7 +386,14 @@ class _ChatScreenState extends State<ChatScreen> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              : const Icon(Icons.send, color: Colors.white),
+                              : Icon(
+                                  isGenerating ? Icons.stop : Icons.send,
+                                  color: isGenerating
+                                      ? Theme.of(
+                                          context,
+                                        ).colorScheme.onErrorContainer
+                                      : Colors.white,
+                                ),
                         ),
                       );
                     },
@@ -384,10 +427,7 @@ class _ConfigDrawer extends StatelessWidget {
                   padding: EdgeInsets.all(16),
                   child: Text(
                     'Configuration',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                   ),
                 ),
                 const Divider(),
@@ -449,9 +489,15 @@ class _ConfigDrawer extends StatelessWidget {
 
     if (state.isDownloading) {
       status = 'Downloading...';
-      details = '${(state.downloadProgress * 100).toStringAsFixed(1)}% complete';
+      details =
+          '${(state.downloadProgress * 100).toStringAsFixed(1)}% complete';
       icon = Icons.downloading_outlined;
       color = Colors.orange;
+    } else if (state.status == ChatStatus.loadingModel) {
+      status = 'Loading...';
+      details = 'Preparing LiteRT-LM in memory';
+      icon = Icons.hourglass_top_outlined;
+      color = Colors.deepPurple;
     } else if (state.isModelLoaded) {
       status = 'Loaded in Memory';
       details = 'Ready for offline inference';
@@ -504,15 +550,21 @@ class _ConfigDrawer extends StatelessWidget {
                 icon: const Icon(Icons.download),
                 label: const Text('Download Model (~2.6GB)'),
               ),
-            if (state.isModelDownloaded && !state.isModelLoaded && !state.isDownloading)
+            if (state.isModelDownloaded &&
+                !state.isModelLoaded &&
+                !state.isDownloading &&
+                state.status != ChatStatus.loadingModel)
               ElevatedButton.icon(
                 onPressed: () {
-                  // Sending message automatically loads model, or we can trigger loaded
-                  context.read<ChatBloc>().add(const SendMessage('hello'));
+                  context.read<ChatBloc>().add(const PreloadModel());
                 },
                 icon: const Icon(Icons.bolt),
                 label: const Text('Load Model'),
               ),
+            if (state.status == ChatStatus.loadingModel) ...[
+              const SizedBox(height: 8),
+              const LinearProgressIndicator(),
+            ],
             if (state.isModelDownloaded && !state.isDownloading) ...[
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -520,9 +572,12 @@ class _ConfigDrawer extends StatelessWidget {
                   context.read<ChatBloc>().add(const DeleteModel());
                 },
                 icon: const Icon(Icons.delete_outline, color: Colors.red),
-                label: const Text('Delete Model File', style: TextStyle(color: Colors.red)),
+                label: const Text(
+                  'Delete Model File',
+                  style: TextStyle(color: Colors.red),
+                ),
               ),
-            ]
+            ],
           ],
         ),
       ),
@@ -551,7 +606,11 @@ class _ConfigDrawer extends StatelessWidget {
             const SizedBox(height: 8),
             Row(
               children: [
-                const Icon(Icons.article_outlined, size: 20, color: Colors.grey),
+                const Icon(
+                  Icons.article_outlined,
+                  size: 20,
+                  color: Colors.grey,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   'Indexed Documents: ${state.documentCount}',
@@ -569,11 +628,13 @@ class _ConfigDrawer extends StatelessWidget {
             OutlinedButton.icon(
               onPressed: () {
                 // Pre-baked mock documentation about SlmApp for instant demo
-                context.read<ChatBloc>().add(const IndexDocument(
-                      title: 'SlmApp Offline Guide',
-                      content:
-                          'SlmApp is a fully offline, private AI chatbot built with Flutter, LiteRT-LM, and Gemma 4 E2B Instruct. It operates 100% on-device. Key features include a memory-efficient resumable downloader for the 2.6GB model, streaming token generation, and an offline RAG (Retrieval-Augmented Generation) pipeline using in-memory vector cosine similarity. Standard document formats supported are plain text and markdown. Designed by the TMA AI Team.',
-                    ));
+                context.read<ChatBloc>().add(
+                  const IndexDocument(
+                    title: 'SlmApp Offline Guide',
+                    content:
+                        'SlmApp is a fully offline, private AI chatbot built with Flutter, LiteRT-LM, and Gemma 4 E2B Instruct. It operates 100% on-device. Key features include a memory-efficient resumable downloader for the 2.6GB model, streaming token generation, and an offline RAG (Retrieval-Augmented Generation) pipeline using in-memory vector cosine similarity. Standard document formats supported are plain text and markdown. Designed by the TMA AI Team.',
+                  ),
+                );
               },
               icon: const Icon(Icons.library_books_outlined),
               label: const Text('Index Demo Doc'),
@@ -585,9 +646,12 @@ class _ConfigDrawer extends StatelessWidget {
                   context.read<ChatBloc>().add(const ClearIndex());
                 },
                 icon: const Icon(Icons.clear_all, color: Colors.red),
-                label: const Text('Clear Vector Store', style: TextStyle(color: Colors.red)),
+                label: const Text(
+                  'Clear Vector Store',
+                  style: TextStyle(color: Colors.red),
+                ),
               ),
-            ]
+            ],
           ],
         ),
       ),
@@ -604,8 +668,9 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isUser = message.role == MessageRole.user;
-    final alignment =
-        isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final alignment = isUser
+        ? CrossAxisAlignment.end
+        : CrossAxisAlignment.start;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -651,9 +716,9 @@ class _MessageBubble extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             _formatTime(message.timestamp),
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Colors.grey[500],
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.labelSmall?.copyWith(color: Colors.grey[500]),
           ),
         ],
       ),
@@ -704,4 +769,3 @@ class _CursorIndicatorState extends State<_CursorIndicator>
     );
   }
 }
-

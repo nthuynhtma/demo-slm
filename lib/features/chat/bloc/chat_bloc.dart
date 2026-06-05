@@ -34,12 +34,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     DocumentIndexer? documentIndexer,
     RagRetriever? ragRetriever,
     ContextBuilder? contextBuilder,
-  })  : _inferenceService = inferenceService,
-        _modelLoader = modelLoader,
-        _documentIndexer = documentIndexer,
-        _ragRetriever = ragRetriever,
-        _contextBuilder = contextBuilder,
-        super(const ChatState()) {
+  }) : _inferenceService = inferenceService,
+       _modelLoader = modelLoader,
+       _documentIndexer = documentIndexer,
+       _ragRetriever = ragRetriever,
+       _contextBuilder = contextBuilder,
+       super(const ChatState()) {
     on<SendMessage>(_onSendMessage);
     on<StreamToken>(_onStreamToken);
     on<StreamComplete>(_onStreamComplete);
@@ -47,8 +47,10 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<ChatError>(_onChatError);
     on<ToggleRag>(_onToggleRag);
     on<DownloadModel>(_onDownloadModel);
+    on<PreloadModel>(_onPreloadModel);
     on<DownloadProgressUpdate>(_onDownloadProgressUpdate);
     on<DeleteModel>(_onDeleteModel);
+    on<CancelGeneration>(_onCancelGeneration);
     on<RefreshModelStatus>(_onRefreshModelStatus);
     on<IndexDocument>(_onIndexDocument);
     on<ClearIndex>(_onClearIndex);
@@ -61,6 +63,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     SendMessage event,
     Emitter<ChatState> emit,
   ) async {
+    if (state.status == ChatStatus.generating ||
+        state.status == ChatStatus.loadingModel) {
+      return;
+    }
+
     final queryText = event.message.trim();
     if (queryText.isEmpty) return;
 
@@ -80,7 +87,6 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       timestamp: DateTime.now(),
       isStreaming: true,
     );
-    final promptMessages = [...state.messages, userMessage];
     final pendingMessages = [...state.messages, userMessage, assistantMessage];
 
     emit(
@@ -95,15 +101,17 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     try {
       // Step 1: Ensure the model is loaded (and downloaded if necessary)
       await _modelLoader.ensureModelLoaded();
-      
+
       // Update state to downloaded & loaded
       final isDownloaded = await _modelLoader.isModelDownloaded();
-      emit(state.copyWith(
-        status: ChatStatus.generating,
-        isModelDownloaded: isDownloaded,
-        isModelLoaded: true,
-        clearError: true,
-      ));
+      emit(
+        state.copyWith(
+          status: ChatStatus.generating,
+          isModelDownloaded: isDownloaded,
+          isModelLoaded: true,
+          clearError: true,
+        ),
+      );
 
       // Step 2: Retrieve context from RAG if enabled
       final queryToSend = state.useRag
@@ -133,6 +141,40 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       );
     } catch (e) {
       add(ChatError(e.toString()));
+    }
+  }
+
+  /// Load the downloaded model into memory without sending a chat message.
+  Future<void> _onPreloadModel(
+    PreloadModel event,
+    Emitter<ChatState> emit,
+  ) async {
+    if (state.status == ChatStatus.generating ||
+        state.status == ChatStatus.loadingModel) {
+      return;
+    }
+
+    emit(state.copyWith(status: ChatStatus.loadingModel, clearError: true));
+
+    try {
+      await _modelLoader.ensureModelLoaded();
+      final isDownloaded = await _modelLoader.isModelDownloaded();
+      emit(
+        state.copyWith(
+          status: ChatStatus.ready,
+          isModelDownloaded: isDownloaded,
+          isModelLoaded: true,
+          clearError: true,
+        ),
+      );
+    } catch (e) {
+      emit(
+        state.copyWith(
+          status: ChatStatus.error,
+          errorMessage: e.toString(),
+          isModelLoaded: false,
+        ),
+      );
     }
   }
 
@@ -206,6 +248,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   }
 
   void _onStreamComplete(StreamComplete event, Emitter<ChatState> emit) {
+    _inferenceSubscription = null;
     final messages = state.messages;
     if (messages.isEmpty) return;
 
@@ -222,16 +265,20 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
   Future<void> _onClearChat(ClearChat event, Emitter<ChatState> emit) async {
     await _inferenceSubscription?.cancel();
+    _inferenceSubscription = null;
     await _inferenceService.resetSession();
-    emit(state.copyWith(
-      status: ChatStatus.ready,
-      messages: const [],
-      clearError: true,
-    ));
+    emit(
+      state.copyWith(
+        status: ChatStatus.ready,
+        messages: const [],
+        clearError: true,
+      ),
+    );
   }
 
   void _onChatError(ChatError event, Emitter<ChatState> emit) {
     _inferenceSubscription?.cancel();
+    _inferenceSubscription = null;
 
     // Mark the last streaming message as done (with whatever text it has)
     final messages = state.messages;
@@ -252,13 +299,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     emit(state.copyWith(useRag: !state.useRag));
   }
 
-  Future<void> _onDownloadModel(DownloadModel event, Emitter<ChatState> emit) async {
+  Future<void> _onDownloadModel(
+    DownloadModel event,
+    Emitter<ChatState> emit,
+  ) async {
     if (state.isDownloading) return;
-    emit(state.copyWith(
-      isDownloading: true,
-      downloadProgress: 0.0,
-      clearError: true,
-    ));
+    emit(
+      state.copyWith(
+        isDownloading: true,
+        downloadProgress: 0.0,
+        clearError: true,
+      ),
+    );
 
     try {
       await _modelLoader.downloadModel(
@@ -268,62 +320,98 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       );
 
       final isDownloaded = await _modelLoader.isModelDownloaded();
-      emit(state.copyWith(
-        isDownloading: false,
-        downloadProgress: 1.0,
-        isModelDownloaded: isDownloaded,
-      ));
+      emit(
+        state.copyWith(
+          isDownloading: false,
+          downloadProgress: 1.0,
+          isModelDownloaded: isDownloaded,
+        ),
+      );
     } catch (e) {
-      emit(state.copyWith(
-        isDownloading: false,
-        errorMessage: e.toString(),
-        status: ChatStatus.error,
-      ));
+      emit(
+        state.copyWith(
+          isDownloading: false,
+          errorMessage: e.toString(),
+          status: ChatStatus.error,
+        ),
+      );
     }
   }
 
-  void _onDownloadProgressUpdate(DownloadProgressUpdate event, Emitter<ChatState> emit) {
+  /// Cancel the active generation while preserving any partial assistant text.
+  Future<void> _onCancelGeneration(
+    CancelGeneration event,
+    Emitter<ChatState> emit,
+  ) async {
+    if (state.status != ChatStatus.generating) return;
+
+    await _inferenceSubscription?.cancel();
+    _inferenceSubscription = null;
+    await _inferenceService.cancelGeneration();
+
+    emit(
+      state.copyWith(
+        status: ChatStatus.ready,
+        messages: _finalizeStreamingMessages(state.messages),
+        clearError: true,
+      ),
+    );
+  }
+
+  void _onDownloadProgressUpdate(
+    DownloadProgressUpdate event,
+    Emitter<ChatState> emit,
+  ) {
     emit(state.copyWith(downloadProgress: event.progress));
   }
 
-  Future<void> _onDeleteModel(DeleteModel event, Emitter<ChatState> emit) async {
+  Future<void> _onDeleteModel(
+    DeleteModel event,
+    Emitter<ChatState> emit,
+  ) async {
     try {
       await _modelLoader.deleteModel();
-      emit(state.copyWith(
-        isModelDownloaded: false,
-        isModelLoaded: false,
-        downloadProgress: 0.0,
-      ));
+      emit(
+        state.copyWith(
+          isModelDownloaded: false,
+          isModelLoaded: false,
+          downloadProgress: 0.0,
+        ),
+      );
     } catch (e) {
-      emit(state.copyWith(
-        errorMessage: e.toString(),
-        status: ChatStatus.error,
-      ));
+      emit(
+        state.copyWith(errorMessage: e.toString(), status: ChatStatus.error),
+      );
     }
   }
 
-  Future<void> _onRefreshModelStatus(RefreshModelStatus event, Emitter<ChatState> emit) async {
+  Future<void> _onRefreshModelStatus(
+    RefreshModelStatus event,
+    Emitter<ChatState> emit,
+  ) async {
     final isDownloaded = await _modelLoader.isModelDownloaded();
     final isLoaded = _modelLoader.isLoaded;
     final docCount = _documentIndexer != null
-        ? await _documentIndexer!.documentCount
+        ? await _documentIndexer.documentCount
         : 0;
 
-    emit(state.copyWith(
-      isModelDownloaded: isDownloaded,
-      isModelLoaded: isLoaded,
-      documentCount: docCount,
-    ));
+    emit(
+      state.copyWith(
+        isModelDownloaded: isDownloaded,
+        isModelLoaded: isLoaded,
+        documentCount: docCount,
+      ),
+    );
   }
 
-  Future<void> _onIndexDocument(IndexDocument event, Emitter<ChatState> emit) async {
+  Future<void> _onIndexDocument(
+    IndexDocument event,
+    Emitter<ChatState> emit,
+  ) async {
     final indexer = _documentIndexer;
     if (indexer == null) return;
 
-    emit(state.copyWith(
-      indexingProgress: 0.0,
-      clearError: true,
-    ));
+    emit(state.copyWith(indexingProgress: 0.0, clearError: true));
 
     try {
       await for (final progress in indexer.indexText(
@@ -334,16 +422,17 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       }
 
       final docCount = await indexer.documentCount;
-      emit(state.copyWith(
-        documentCount: docCount,
-        clearIndexingProgress: true,
-      ));
+      emit(
+        state.copyWith(documentCount: docCount, clearIndexingProgress: true),
+      );
     } catch (e) {
-      emit(state.copyWith(
-        clearIndexingProgress: true,
-        errorMessage: e.toString(),
-        status: ChatStatus.error,
-      ));
+      emit(
+        state.copyWith(
+          clearIndexingProgress: true,
+          errorMessage: e.toString(),
+          status: ChatStatus.error,
+        ),
+      );
     }
   }
 
@@ -355,10 +444,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       await indexer.clearIndex();
       emit(state.copyWith(documentCount: 0));
     } catch (e) {
-      emit(state.copyWith(
-        errorMessage: e.toString(),
-        status: ChatStatus.error,
-      ));
+      emit(
+        state.copyWith(errorMessage: e.toString(), status: ChatStatus.error),
+      );
     }
   }
 
@@ -367,5 +455,21 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _inferenceSubscription?.cancel();
     await _modelLoader.unloadModel();
     return super.close();
+  }
+
+  /// Finalize or remove any in-progress assistant message after interruption.
+  List<ChatMessage> _finalizeStreamingMessages(List<ChatMessage> messages) {
+    if (messages.isEmpty) return messages;
+
+    final lastMessage = messages.last;
+    if (!lastMessage.isStreaming) return messages;
+    if (lastMessage.text.trim().isEmpty) {
+      return messages.sublist(0, messages.length - 1);
+    }
+
+    return [
+      ...messages.sublist(0, messages.length - 1),
+      lastMessage.copyWith(isStreaming: false),
+    ];
   }
 }

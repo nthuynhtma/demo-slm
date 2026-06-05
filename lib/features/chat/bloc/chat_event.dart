@@ -58,6 +58,11 @@ class DownloadModel extends ChatEvent {
   const DownloadModel();
 }
 
+/// Explicitly load a downloaded model into memory without sending a chat message.
+class PreloadModel extends ChatEvent {
+  const PreloadModel();
+}
+
 /// Update model download progress.
 class DownloadProgressUpdate extends ChatEvent {
   final double progress;
@@ -71,6 +76,11 @@ class DownloadProgressUpdate extends ChatEvent {
 /// Delete the model file from local storage.
 class DeleteModel extends ChatEvent {
   const DeleteModel();
+}
+
+/// Stop the active generation and keep any partial text that already streamed.
+class CancelGeneration extends ChatEvent {
+  const CancelGeneration();
 }
 
 /// Refresh the state of model downloading / loading status.
@@ -93,4 +103,3 @@ class IndexDocument extends ChatEvent {
 class ClearIndex extends ChatEvent {
   const ClearIndex();
 }
-

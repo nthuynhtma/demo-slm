@@ -78,7 +78,7 @@ class MockInferenceService implements InferenceService {
   String _mockResponse(String prompt) {
     final lower = prompt.toLowerCase();
 
-    if (lower.contains('hello') || lower.contains('hi') || lower.contains('xin chào')) {
+    if (lower.contains('hello') || lower.contains('xin chào')) {
       return 'Hello! I am Gemma 4, an on-device AI assistant running entirely offline. How can I help you today?';
     }
     if (lower.contains('who are you') || lower.contains('what are you')) {
