@@ -13,6 +13,7 @@
 | 2026-06 | **iOS bridge dùng `LlmInference.Session` cho generation settings** | Với MediaPipeTasksGenAI 0.10.35, `temperature/topk` nằm ở session options, không nằm ở engine options |
 | 2026-06 | **Băm SHA256 dạng stream để tránh OOM** | Tránh lỗi tràn bộ nhớ (OOM) khi băm file model nặng 2.6GB trên thiết bị di động |
 | 2026-06 | **Resumable download qua Dio Range** | Hỗ trợ tải tiếp tục model 2.6GB bằng HTTP Range header để tăng độ ổn định |
+| 2026-06 | **Background downloader thay vì Dio** | `background_downloader` cho phép download sống sót qua app suspend/terminate, native notification support Android/iOS, built-in pause/resume/cancel |
 
 ## ADR-2026-06-05 — Explicit Model Lifecycle and Staged Generation Pipeline
 
@@ -68,6 +69,7 @@ App Background
 2. **Startup becomes a first-class flow**
    - Startup must orchestrate model and indexed-document checks in parallel.
    - Startup chooses between a download prompt and auto-preload before the app is considered ready.
+   - Startup also checks background download task status for active/paused downloads.
 
 3. **Generation becomes pipeline-driven**
    - Retrieval, token budgeting, generation, streaming aggregation, and finalization are separate stages.
@@ -162,6 +164,13 @@ App Background
 - `flutter build ios --debug --no-codesign` đã pass sau khi sửa iOS bridge theo registrar API + session-based generation
 - **Dio ResponseBody headers**: Khi cấu hình `ResponseType.stream` trong Dio, `response.data?.headers` trả về kiểu raw `Map<String, List<String>>` chứ không phải class `Headers`. Cần truy xuất header qua `headers[headerName]?.first`.
 - **Băm SHA-256 không gây OOM**: Tránh dùng `file.readAsBytes()` đối với file model lớn (2.6GB), cần dùng `sha256.bind(file.openRead())` để stream bytes qua bộ băm giúp bảo vệ RAM trên mobile.
+- **background_downloader pattern**: Không dùng Dio + Range headers nữa. `background_downloader` quản lý task queue + native download engine riêng. Updates lắng nghe qua `FileDownloader().updates` stream. Notification cần cấu hình trước qua `configureNotification()`. Task tồn tại trong database native và có thể check trạng thái qua `allTasks()` + `database.recordForId()`.
+- **Android POST_NOTIFICATIONS permission**: Cần thêm `POST_NOTIFICATIONS` vào AndroidManifest.xml cho background downloader notification (Android 13+).
+- **main() thành async**: `modelDownloader.initialize()` bắt buộc gọi trong `main()` trước khi runApp, nên cần `main() async`.
+- **Kiểm tra task active lúc startup**: `ChatBloc` startup flow giờ check `getActiveDownloadUpdate()` để khôi phục trạng thái download bị dang dở.
+- **Download update stream pattern**: `ModelDownloader` emit updates qua `StreamController.broadcast()` → `ModelLoader` expose stream → `ChatBloc` subscribe → dispatch `DownloadUpdateReceived` event → state machine xử lý status transitions.
+- **DownloadComplete → PreloadModel tự động**: Khi download hoàn tất, `ChatBloc` tự dispatch `PreloadModel` để load model ngay mà không cần user tap.
+- **Pause/Resume/Cancel UI**: Download progress giờ có Pause/Resume/Cancel buttons ở cả main screen và drawer.
 
 ## Documentation Sync Notes (2026-06-05)
 
@@ -318,6 +327,93 @@ App Background
 3. Token allocator nhận **original queryText**, không nhận RAG-concatenated text
 4. Startup checks chạy **song song** (Future.wait) để giảm latency
 5. Streaming timer callback dùng `add(event)` chứ không `emit()` trực tiếp — kèm guard `isClosed`
+
+---
+
+## Implementation Sync Notes (2026-06-06) — Background Downloader Migration
+
+### Download Engine Migration: Dio → background_downloader
+
+- **File:** `lib/features/model_manager/download/model_downloader.dart` — **Major rewrite**
+- **Lý do:** Download model 2.6GB cần sống sót qua app suspend/terminate. `Dio` + HTTP Range headers chỉ hoạt động khi app ở foreground. `background_downloader` dùng native download engine riêng (iOS `URLSessionDownloadTask`, Android `DownloadManager`) nên download tiếp tục chạy ngay cả khi app bị suspend.
+- **New dependencies:** `background_downloader` thay thế `dio`
+- **API thay đổi:**
+  - `downloadModel()` trả về `Future<void>` (không còn `Future<String>`) — path không cần return vì downloader tự quản lý
+  - Thêm `initialize()`: cấu hình notification + track tasks + subscribe updates stream
+  - Thêm `pauseDownload()`, `resumeDownload()`, `cancelDownload()`
+  - Thêm `getActiveDownloadUpdate()`: kiểm tra task trong database native
+  - Thêm `downloadUpdates` Stream: reactive updates qua `StreamController.broadcast()`
+  - Bỏ `onProgress` callback pattern
+
+### Status Machine
+
+- **Enum:** `ModelDownloadStatus { none, enqueued, downloading, paused, complete, failed, canceled }`
+- **Update flow:** `background_downloader` native engine → `FileDownloader().updates` stream → `ModelDownloader._handleStatusUpdate()` / `_handleProgressUpdate()` → `_updatesController` broadcast → `ModelLoader.downloadUpdates` → `ChatBloc._downloadSubscription` → add `DownloadUpdateReceived` → state machine xử lý transitions
+
+### ChatBloc Changes
+
+- **File:** `lib/features/chat/bloc/chat_bloc.dart`
+- Thêm `_downloadSubscription` để subscribe `_modelLoader.downloadUpdates`
+- Thêm `_onDownloadUpdateReceived()`: map `ModelDownloadStatus` → `ChatState` transitions
+  - `downloading` → `isDownloading: true, isDownloadPaused: false`
+  - `paused` → `isDownloading: true, isDownloadPaused: true`
+  - `complete` → `isDownloading: false, isModelDownloaded: true` + tự động dispatch `PreloadModel`
+  - `failed` → `isDownloading: false, status: error`
+  - `canceled` → `isDownloading: false, downloadProgress: 0.0, status: needsDownload`
+- Thêm `_onPauseModelDownload()`, `_onResumeModelDownload()`, `_onCancelModelDownload()` handlers
+- `_onDownloadModel()` đơn giản hóa: chỉ gọi `_modelLoader.downloadModel()` không callback
+- `_onStartupRequested()`: kiểm tra `getActiveDownloadUpdate()` để khôi phục trạng thái download background
+- `close()`: cancel `_downloadSubscription`
+- `_onDownloadProgressUpdate()` deprecated (giữ handler rỗng để không break event registration nhưng không emit gì)
+
+### ChatEvent Changes
+
+- **File:** `lib/features/chat/bloc/chat_event.dart`
+- Thêm: `PauseModelDownload`, `ResumeModelDownload`, `CancelModelDownload`, `DownloadUpdateReceived`
+
+### ChatState Changes
+
+- **File:** `lib/features/chat/bloc/chat_state.dart`
+- Thêm: `isDownloadPaused` field
+
+### UI Changes
+
+- **File:** `lib/features/chat/screens/chat_screen.dart`
+- Download progress hiển thị Pause/Resume/Cancel buttons (cả main screen và drawer)
+- Trạng thái "Download Paused" với icon `pause_circle_outline`
+- Label tiếng Việt: "Tạm dừng", "Tiếp tục", "Hủy"
+
+### Platform Changes
+
+- **File:** `android/app/src/main/AndroidManifest.xml`
+- Thêm `POST_NOTIFICATIONS` permission (Android 13+ cho notification từ background downloader)
+
+### Init Flow Changes
+
+- **File:** `lib/main.dart`
+- `main()` chuyển từ `void` → `Future<void>`
+- Thêm `await modelDownloader.initialize()` trước `runApp()`
+
+### ModelLoader Changes
+
+- **File:** `lib/features/model_manager/loader/model_loader.dart`
+- Thêm `downloadUpdates` getter (proxy từ `_downloader.downloadUpdates`)
+- Thêm `getActiveDownloadUpdate()`, `pauseDownload()`, `resumeDownload()`, `cancelDownload()`
+- `downloadModel()` đổi signature: bỏ `onProgress`, thêm `url`/`expectedSha256` optional params
+
+### Test Changes
+
+- **Files:** `test/rag_chat_test.dart`, `test/widget_test.dart`
+- Cập nhật test cho API mới của `ModelDownloader` / `ModelLoader`
+
+### Gotchas Mới
+
+- **background_downloader pattern**: Task có `taskId` để identify. Check active task qua `FileDownloader().allTasks()`. Status lưu trong database native.
+- **Notification setup bắt buộc**: `configureNotification()` phải gọi trước khi enqueue task.
+- **Android POST_NOTIFICATIONS**: Cần runtime permission + manifest declaration cho Android 13+.
+- **main() async mandatory**: `modelDownloader.initialize()` là bất đồng bộ, bắt buộc `main()` async.
+- **DownloadComplete → PreloadModel tự động**: Không còn step "tap Load Model" sau download.
+- **Kiểm tra background task khi startup**: `ChatBloc` startup check `getActiveDownloadUpdate()` để UI hiển thị đúng trạng thái nếu app restart giữa lúc download.
 
 ## Context Window Notes
 

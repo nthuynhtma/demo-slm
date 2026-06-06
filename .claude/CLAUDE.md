@@ -19,10 +19,11 @@ If the current implementation differs, follow this document and the rules under 
 
 ```text
 App Start
--> Check Model Status + Check Indexed Documents (in parallel)
+-> Check Model Status + Check Indexed Documents + Check Background Download (in parallel)
 -> Model Downloaded?
 -> If not downloaded: prompt download
 -> If downloaded: auto preload model
+-> If download active/paused: show download progress UI
 -> Ready
 ```
 
@@ -63,6 +64,7 @@ Download, preload, ensure-loaded, and release are separate lifecycle stages.
 
 The app must perform model-status and indexed-document checks as an explicit startup flow.
 Startup decides whether to prompt for download or auto-preload the model before entering the ready state.
+Startup also checks for active background download tasks (e.g. if app was restarted mid-download).
 
 ### 3. Generation uses a staged pipeline
 
@@ -88,6 +90,14 @@ This policy must be explicit and testable.
 If startup reports indexed-document availability, that status must come from durable state.
 An in-memory-only store is acceptable for experimentation, but it must be treated as a temporary limitation rather than the long-term architecture.
 
+### 7. Download resilience via background_downloader
+
+Model downloads (2.6 GB) use `background_downloader` (not Dio) to survive app suspend/terminate.
+The download engine uses native iOS `URLSessionDownloadTask` and Android `DownloadManager`.
+Pause, resume, and cancel are first-class actions exposed through the UI.
+Android requires `POST_NOTIFICATIONS` permission for download progress notifications (Android 13+).
+`main()` must be `async` to call `modelDownloader.initialize()` before `runApp()`.
+
 ## High-Level Component Model
 
 ```text
@@ -99,6 +109,7 @@ Chat / App Workflow Coordinator (flutter_bloc)
     ├── Startup Flow
     │     • checkModelStatus()
     │     • checkIndexedDocuments()
+    │     • checkBackgroundDownloadTask()
     │     • promptDownloadIfNeeded()
     │     • autoPreloadIfDownloaded()
     │
@@ -113,6 +124,9 @@ Chat / App Workflow Coordinator (flutter_bloc)
     ├── Model Lifecycle Service
     │     • isModelDownloaded()
     │     • downloadModel()
+    │     • pauseDownload()
+    │     • resumeDownload()
+    │     • cancelDownload()
     │     • preloadModel()
     │     • ensureModelLoaded()
     │     • releaseModel()
@@ -134,17 +148,20 @@ Chat / App Workflow Coordinator (flutter_bloc)
 | Web artifact | `.task` |
 | Embedding | MiniLM via `fonnx` or another local embedding runtime |
 | Vector Store | `sqlite_vec` preferred, in-memory fallback only for prototyping |
+| Download Engine | `background_downloader` (native Android/iOS, survives suspend/terminate) |
 | Storage | `flutter_secure_storage`, `path_provider`, durable metadata store as needed |
 | Streaming | Native partials -> batched Dart/UI updates |
 
 ## Key Constraints
 
-- **Model size**: Gemma 4 E2B is about 2.6 GB and requires resumable download plus caching.
+- **Model size**: Gemma 4 E2B is about 2.6 GB and requires resumable background download plus caching.
 - **Memory**: Devices need enough RAM to load and run the model; the app must release resources when appropriate.
 - **No silent first-use download**: Missing models must trigger an explicit download prompt rather than being downloaded inside the send flow.
+- **Download resilience**: Downloads survive app suspend/terminate via `background_downloader` native engine. Pause/Resume/Cancel controls are exposed in UI.
 - **Offline requirement**: After the model and embeddings are present locally, inference and retrieval stay on-device.
 - **Context window**: Gemma 4 E2B has an approximately 8K token window, so history, retrieved context, and response headroom must be budgeted together.
 - **Platform constraints**: Android prefers NNAPI with CPU fallback; iOS uses Core ML where available.
+- **Android notifications**: `POST_NOTIFICATIONS` permission required for download progress notifications (Android 13+).
 
 ## Project Structure
 
@@ -155,8 +172,24 @@ lib/
 │   └── errors/
 ├── features/
 │   ├── chat/
+│   │   ├── bloc/
+│   │   │   ├── chat_bloc.dart       — download subscription, state machine
+│   │   │   ├── chat_event.dart      — pause/resume/cancel download events
+│   │   │   ├── chat_state.dart      — isDownloadPaused field
+│   │   │   └── token_budget_allocator.dart
+│   │   ├── models/
+│   │   └── screens/
+│   │       └── chat_screen.dart     — pause/resume/cancel UI buttons
 │   ├── model_manager/
+│   │   └── download/
+│   │       └── model_downloader.dart  — background_downloader integration
+│   │   └── loader/
+│   │       └── model_loader.dart      — downloadUpdates stream proxy
 │   └── rag/
+│       ├── indexer/
+│       ├── models/
+│       ├── retriever/
+│       └── vector_store/
 └── native/
     ├── android/
     └── ios/
@@ -173,6 +206,10 @@ That is acceptable during migration, but the behavior must move toward the workf
 - Android uses `tasks-genai:0.10.36`.
 - Version 0.10.36 required để support `STABLEHLO_COMPOSITE` op trong model .litertlm.
 - Startup, typing preload, generation staging, streaming batching, and background release are now first-class architecture decisions.
+- **Download engine**: `background_downloader` thay thế `Dio` cho model 2.6 GB. Download sống sót qua app suspend/terminate nhờ native engine. Updates reactive qua Stream pattern.
+- **Download status machine**: `ModelDownloadStatus { none, enqueued, downloading, paused, complete, failed, canceled }`.
+- **Download → Preload**: Khi download hoàn tất, `ChatBloc` tự động dispatch `PreloadModel`.
+- **Startup download check**: Startup flow kiểm tra `getActiveDownloadUpdate()` để khôi phục trạng thái download background.
 - Documentation may lead implementation during this migration; implementation changes should align to docs in a phased manner.
 
 ## Related Files
@@ -201,6 +238,7 @@ All six architectural tasks from the ADR-2026-06-05 migration plan have been imp
 | 5 | Streaming Update Batching — 100 ms flush timer (`_tokenBuffer`) | ✅ Done | `chat/bloc/chat_bloc.dart` |
 | 6 | Token Budget Allocator — 8 K context window management | ✅ Done | `chat/bloc/token_budget_allocator.dart` |
 | 7 | Test suite — fix hanging `IndexDocument` test via `NullVectorStorePersistence` | ✅ Done | `test/rag_chat_test.dart`, `vector_store.dart` |
+| 8 | Background Downloader Migration — Dio → `background_downloader` | ✅ Done | `model_downloader.dart`, `model_loader.dart`, `chat_bloc.dart`, `chat_event.dart`, `chat_state.dart`, `chat_screen.dart`, `main.dart`, `AndroidManifest.xml` |
 
 ### Architecture notes
 - `VectorStore` now accepts an optional `VectorStorePersistence` backend.
@@ -208,4 +246,7 @@ All six architectural tasks from the ADR-2026-06-05 migration plan have been imp
   - Unit tests inject `NullVectorStorePersistence` to avoid Flutter-binding requirement.
 - `ChatBloc` constructor dispatches `StartupRequested`; tests must call
   `TestWidgetsFlutterBinding.ensureInitialized()` at the top of `main()`.
-
+- **Download engine**: `background_downloader` replaces Dio. Download updates flow: native engine → `FileDownloader().updates` stream → `ModelDownloader._handleStatusUpdate()` → `StreamController.broadcast()` → `ModelLoader.downloadUpdates` → `ChatBloc._downloadSubscription` → `DownloadUpdateReceived` event → state machine transitions.
+- **Pause/Resume/Cancel**: Exposed as `ChatEvent` handlers mapped to `ModelDownloader.pauseDownload()/resumeDownload()/cancelDownload()`. UI buttons in both main screen and drawer.
+- **Android permission**: `POST_NOTIFICATIONS` required in `AndroidManifest.xml` for background download notifications on Android 13+.
+- **Init order**: `main()` is now `async`; `modelDownloader.initialize()` must be called before `runApp()` to configure notifications and subscribe to background updates.
