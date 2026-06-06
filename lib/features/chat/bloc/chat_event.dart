@@ -103,3 +103,23 @@ class IndexDocument extends ChatEvent {
 class ClearIndex extends ChatEvent {
   const ClearIndex();
 }
+
+/// Initialize the application and check model + RAG status on startup.
+class StartupRequested extends ChatEvent {
+  const StartupRequested();
+}
+
+/// App was backgrounded.
+class AppBackgrounded extends ChatEvent {
+  const AppBackgrounded();
+}
+
+/// App returned to the foreground.
+class AppForegrounded extends ChatEvent {
+  const AppForegrounded();
+}
+
+/// Flush buffered tokens to the UI state.
+class FlushTokens extends ChatEvent {
+  const FlushTokens();
+}

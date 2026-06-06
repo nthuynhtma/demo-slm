@@ -15,6 +15,8 @@ class RagRetriever {
   })  : _embedder = embedder,
         _store = store;
 
+  VectorStore get store => _store;
+
   /// Retrieve relevant context chunks for the given [query].
   ///
   /// [topK] controls the final number of results.

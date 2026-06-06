@@ -185,3 +185,25 @@ That is acceptable during migration, but the behavior must move toward the workf
 - `rules/flutter-patterns.md`
 - `skills/model-loader.md`
 - `skills/ios-litert-bridge.md`
+
+## Implementation Status (updated 2026-06-06)
+
+All six architectural tasks from the ADR-2026-06-05 migration plan have been implemented.
+
+| # | Task | Status | Key files |
+|---|------|--------|-----------|
+| 1 | Fix TextChunker infinite loop (short text ≤ 448 chars) | ✅ Done | `rag/indexer/text_chunker.dart` |
+| 2 | Durable Vector Store — persist to `rag_store.json` | ✅ Done | `rag/vector_store/vector_store.dart` |
+| 3 | Canonical Startup Flow (`checkingStartup` → `needsDownload` / auto-preload) | ✅ Done | `chat/bloc/chat_bloc.dart`, `chat_state.dart`, `chat_screen.dart` |
+| 4 | App Lifecycle Observer — release model on background, reload on foreground | ✅ Done | `chat/screens/chat_screen.dart`, `chat/bloc/chat_bloc.dart` |
+| 5 | Streaming Update Batching — 100 ms flush timer (`_tokenBuffer`) | ✅ Done | `chat/bloc/chat_bloc.dart` |
+| 6 | Token Budget Allocator — 8 K context window management | ✅ Done | `chat/bloc/token_budget_allocator.dart` |
+| 7 | Test suite — fix hanging `IndexDocument` test via `NullVectorStorePersistence` | ✅ Done | `test/rag_chat_test.dart`, `vector_store.dart` |
+
+### Architecture notes
+- `VectorStore` now accepts an optional `VectorStorePersistence` backend.
+  - Production default: `DiskVectorStorePersistence` (path_provider → ApplicationSupport).
+  - Unit tests inject `NullVectorStorePersistence` to avoid Flutter-binding requirement.
+- `ChatBloc` constructor dispatches `StartupRequested`; tests must call
+  `TestWidgetsFlutterBinding.ensureInitialized()` at the top of `main()`.
+

@@ -6,6 +6,8 @@ import '../../model_manager/loader/model_loader.dart';
 import '../../rag/indexer/document_indexer.dart';
 import '../../rag/retriever/context_builder.dart';
 import '../../rag/retriever/rag_retriever.dart';
+import '../../rag/vector_store/vector_store.dart';
+import 'token_budget_allocator.dart';
 
 import '../models/chat_message.dart';
 import 'chat_event.dart';
@@ -24,6 +26,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   final ContextBuilder? _contextBuilder;
   final Uuid _uuid = const Uuid();
   StreamSubscription<String>? _inferenceSubscription;
+  final StringBuffer _tokenBuffer = StringBuffer();
+  Timer? _flushTimer;
   static const String _systemPrompt =
       'You are a helpful offline AI assistant running on-device. '
       'Answer clearly and use the provided conversation history when relevant.';
@@ -54,9 +58,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<RefreshModelStatus>(_onRefreshModelStatus);
     on<IndexDocument>(_onIndexDocument);
     on<ClearIndex>(_onClearIndex);
+    on<StartupRequested>(_onStartupRequested);
+    on<AppBackgrounded>(_onAppBackgrounded);
+    on<AppForegrounded>(_onAppForegrounded);
+    on<FlushTokens>(_onFlushTokens);
 
     // Initial check of model and RAG status
-    add(const RefreshModelStatus());
+    add(const StartupRequested());
   }
 
   Future<void> _onSendMessage(
@@ -99,7 +107,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     );
 
     try {
-      // Step 1: Ensure the model is loaded (and downloaded if necessary)
+      // Step 1: Ensure the model is loaded
       await _modelLoader.ensureModelLoaded();
 
       // Update state to downloaded & loaded
@@ -114,18 +122,40 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       );
 
       // Step 2: Retrieve context from RAG if enabled
-      final queryToSend = state.useRag
-          ? await _buildRagPrompt(queryText)
-          : queryText;
+      final List<SearchResult> results = state.useRag && _ragRetriever != null
+          ? await _ragRetriever!.retrieve(queryText, topK: 3)
+          : [];
 
+      final retrievedContextText = results.isNotEmpty && _contextBuilder != null
+          ? _contextBuilder!.build(results, queryText)
+          : null;
+
+      // Step 3: Allocate token budgets
+      final history = state.messages.length > 2
+          ? state.messages.sublist(0, state.messages.length - 2)
+          : <ChatMessage>[];
+
+      const budgetAllocator = TokenBudgetAllocator();
+      final budgetedHistory = budgetAllocator.allocate(
+        history: history,
+        systemPrompt: _systemPrompt,
+        retrievedContext: retrievedContextText,
+        currentQuery: queryText,
+      );
+
+      final queryToSend = retrievedContextText ?? queryText;
       final promptMessagesForGeneration = [
-        ...state.messages,
+        ...budgetedHistory,
         userMessage.copyWith(text: queryToSend),
       ];
 
-      final prompt = _buildPrompt(promptMessagesForGeneration);
+      final prompt = _buildPromptFromMessages(promptMessagesForGeneration);
 
-      // Step 3: Subscribe to streaming inference
+      // Step 4: Subscribe to streaming inference
+      _tokenBuffer.clear();
+      _flushTimer?.cancel();
+      _flushTimer = null;
+
       await _inferenceSubscription?.cancel();
       final stream = _inferenceService.generateStream(prompt: prompt);
       _inferenceSubscription = stream.listen(
@@ -178,13 +208,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     }
   }
 
-  /// Build a Gemma chat prompt from the current conversation history.
-  String _buildPrompt(List<ChatMessage> history) {
-    final trimmedHistory = _trimHistory(history);
+  /// Build a Gemma chat prompt from a custom list of messages (already budgeted).
+  String _buildPromptFromMessages(List<ChatMessage> history) {
     final buf = StringBuffer();
     buf.write('<start_of_turn>system\n$_systemPrompt<end_of_turn>\n');
 
-    for (final message in trimmedHistory) {
+    for (final message in history) {
       if (message.text.trim().isEmpty) continue;
       final role = switch (message.role) {
         MessageRole.user => 'user',
@@ -213,41 +242,42 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     }
   }
 
-  /// Keep the newest messages that fit inside the target context budget.
-  List<ChatMessage> _trimHistory(
-    List<ChatMessage> history, {
-    int maxTokens = 6000,
-  }) {
-    var totalTokens = 0;
-    final trimmed = <ChatMessage>[];
+  void _onStreamToken(StreamToken event, Emitter<ChatState> emit) {
+    _tokenBuffer.write(event.token);
 
-    for (final message in history.reversed) {
-      final estimatedTokens = (message.text.length / 3.5).ceil();
-      if (totalTokens + estimatedTokens > maxTokens) break;
-      totalTokens += estimatedTokens;
-      trimmed.insert(0, message);
+    if (_flushTimer == null) {
+      _flushTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+        add(const FlushTokens());
+      });
     }
-
-    return trimmed;
   }
 
-  void _onStreamToken(StreamToken event, Emitter<ChatState> emit) {
+  void _onFlushTokens(FlushTokens event, Emitter<ChatState> emit) {
+    final textToFlush = _tokenBuffer.toString();
+    if (textToFlush.isEmpty) return;
+    _tokenBuffer.clear();
+
     final messages = state.messages;
     if (messages.isEmpty) return;
 
     final lastMessage = messages.last;
     if (!lastMessage.isStreaming) return;
 
-    // Append token to the last assistant message
     final updatedMessages = [
       ...messages.sublist(0, messages.length - 1),
-      lastMessage.copyWith(text: lastMessage.text + event.token),
+      lastMessage.copyWith(text: lastMessage.text + textToFlush),
     ];
 
     emit(state.copyWith(messages: updatedMessages));
   }
 
   void _onStreamComplete(StreamComplete event, Emitter<ChatState> emit) {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+
+    final remainingText = _tokenBuffer.toString();
+    _tokenBuffer.clear();
+
     _inferenceSubscription = null;
     final messages = state.messages;
     if (messages.isEmpty) return;
@@ -257,13 +287,20 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     final updatedMessages = [
       ...messages.sublist(0, messages.length - 1),
-      lastMessage.copyWith(isStreaming: false),
+      lastMessage.copyWith(
+        text: lastMessage.text + remainingText,
+        isStreaming: false,
+      ),
     ];
 
     emit(state.copyWith(status: ChatStatus.ready, messages: updatedMessages));
   }
 
   Future<void> _onClearChat(ClearChat event, Emitter<ChatState> emit) async {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    _tokenBuffer.clear();
+
     await _inferenceSubscription?.cancel();
     _inferenceSubscription = null;
     await _inferenceService.resetSession();
@@ -277,13 +314,25 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   }
 
   void _onChatError(ChatError event, Emitter<ChatState> emit) {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+
+    final remainingText = _tokenBuffer.toString();
+    _tokenBuffer.clear();
+
     _inferenceSubscription?.cancel();
     _inferenceSubscription = null;
 
     // Mark the last streaming message as done (with whatever text it has)
     final messages = state.messages;
     final updatedMessages = messages.map((m) {
-      return m.isStreaming ? m.copyWith(isStreaming: false) : m;
+      if (m.isStreaming) {
+        return m.copyWith(
+          text: m.text + remainingText,
+          isStreaming: false,
+        );
+      }
+      return m;
     }).toList();
 
     emit(
@@ -325,6 +374,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           isDownloading: false,
           downloadProgress: 1.0,
           isModelDownloaded: isDownloaded,
+          status: ChatStatus.loadingModel,
+        ),
+      );
+
+      await _modelLoader.ensureModelLoaded();
+      emit(
+        state.copyWith(
+          status: ChatStatus.ready,
+          isModelLoaded: true,
+          clearError: true,
         ),
       );
     } catch (e) {
@@ -345,6 +404,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   ) async {
     if (state.status != ChatStatus.generating) return;
 
+    _flushTimer?.cancel();
+    _flushTimer = null;
+
+    final remainingText = _tokenBuffer.toString();
+    _tokenBuffer.clear();
+
     await _inferenceSubscription?.cancel();
     _inferenceSubscription = null;
     await _inferenceService.cancelGeneration();
@@ -352,7 +417,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     emit(
       state.copyWith(
         status: ChatStatus.ready,
-        messages: _finalizeStreamingMessages(state.messages),
+        messages: _finalizeStreamingMessagesWithText(state.messages, remainingText),
         clearError: true,
       ),
     );
@@ -376,6 +441,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           isModelDownloaded: false,
           isModelLoaded: false,
           downloadProgress: 0.0,
+          status: ChatStatus.needsDownload,
         ),
       );
     } catch (e) {
@@ -392,7 +458,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     final isDownloaded = await _modelLoader.isModelDownloaded();
     final isLoaded = _modelLoader.isLoaded;
     final docCount = _documentIndexer != null
-        ? await _documentIndexer.documentCount
+        ? await _documentIndexer!.documentCount
         : 0;
 
     emit(
@@ -450,26 +516,106 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     }
   }
 
+  Future<void> _onStartupRequested(
+    StartupRequested event,
+    Emitter<ChatState> emit,
+  ) async {
+    emit(state.copyWith(status: ChatStatus.checkingStartup));
+
+    try {
+      // 1. Load VectorStore from disk
+      if (_ragRetriever != null) {
+        await _ragRetriever!.store.loadFromDisk();
+      }
+
+      // 2. Parallel check of model downloaded and document count
+      final isDownloaded = await _modelLoader.isModelDownloaded();
+      final docCount = _documentIndexer != null
+          ? await _documentIndexer!.documentCount
+          : 0;
+
+      emit(
+        state.copyWith(
+          isModelDownloaded: isDownloaded,
+          documentCount: docCount,
+        ),
+      );
+
+      // 3. Branch based on whether model is downloaded
+      if (isDownloaded) {
+        emit(state.copyWith(status: ChatStatus.loadingModel));
+        await _modelLoader.ensureModelLoaded();
+        emit(
+          state.copyWith(
+            status: ChatStatus.ready,
+            isModelLoaded: true,
+            clearError: true,
+          ),
+        );
+      } else {
+        emit(state.copyWith(status: ChatStatus.needsDownload));
+      }
+    } catch (e) {
+      emit(
+        state.copyWith(
+          status: ChatStatus.error,
+          errorMessage: 'Startup initialization failed: $e',
+        ),
+      );
+    }
+  }
+
+  Future<void> _onAppBackgrounded(
+    AppBackgrounded event,
+    Emitter<ChatState> emit,
+  ) async {
+    if (state.status == ChatStatus.generating) {
+      add(const CancelGeneration());
+    }
+
+    if (_modelLoader.isLoaded) {
+      await _modelLoader.unloadModel();
+      emit(
+        state.copyWith(
+          isModelLoaded: false,
+          status: ChatStatus.ready,
+        ),
+      );
+    }
+  }
+
+  Future<void> _onAppForegrounded(
+    AppForegrounded event,
+    Emitter<ChatState> emit,
+  ) async {
+    final isDownloaded = await _modelLoader.isModelDownloaded();
+    if (isDownloaded && !_modelLoader.isLoaded && state.status != ChatStatus.loadingModel) {
+      add(const PreloadModel());
+    }
+  }
+
   @override
   Future<void> close() async {
+    _flushTimer?.cancel();
     await _inferenceSubscription?.cancel();
     await _modelLoader.unloadModel();
     return super.close();
   }
 
-  /// Finalize or remove any in-progress assistant message after interruption.
-  List<ChatMessage> _finalizeStreamingMessages(List<ChatMessage> messages) {
+  List<ChatMessage> _finalizeStreamingMessagesWithText(List<ChatMessage> messages, String remainingText) {
     if (messages.isEmpty) return messages;
 
     final lastMessage = messages.last;
     if (!lastMessage.isStreaming) return messages;
-    if (lastMessage.text.trim().isEmpty) {
+    
+    final newText = lastMessage.text + remainingText;
+    if (newText.trim().isEmpty) {
       return messages.sublist(0, messages.length - 1);
     }
 
     return [
       ...messages.sublist(0, messages.length - 1),
-      lastMessage.copyWith(isStreaming: false),
+      lastMessage.copyWith(text: newText, isStreaming: false),
     ];
   }
 }

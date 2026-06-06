@@ -204,6 +204,77 @@ App Background
 - **Kiểm thử tập trung cho control flow mới**: Đã thêm test cho preload model và cancel generation; cả hai đều pass khi chạy riêng bằng `flutter test --plain-name ...`.
 - **Rủi ro test hiện tại**: Chạy toàn bộ `test/rag_chat_test.dart` vẫn có dấu hiệu treo ở đường đi `IndexDocument event updates document count`, nên cần điều tra riêng luồng indexing/test async này trước khi coi file test đó là fully stable.
 
+## Implementation Sync Notes (2026-06-06)
+
+### Durable Vector Store
+
+- `VectorStore` đã được mở rộng với `saveToDisk()` / `loadFromDisk()` dùng `dart:convert` + `path_provider`.
+- File lưu tại `ApplicationSupport/rag_store.json` — flat JSON structure, không cần DB.
+- Mỗi mutation (`add`, `delete`, `clear`) tự động gọi `saveToDisk()` ngay sau khi thay đổi state.
+- Startup flow gọi `loadFromDisk()` song song với model status check → indexed docs available ngay sau khởi động lại app.
+- **Gotcha**: `path_provider` cần `WidgetsFlutterBinding.ensureInitialized()` trước khi dùng trong `main()`.
+
+### TextChunker Bug Fix
+
+- Phát hiện **infinite loop** trong `TextChunker` khi `text.length <= chunkSize` (mặc định 448 ký tự).
+- Root cause: điều kiện `while (start < text.length)` không thoát vì `overlap` giữ `start` không tiến.
+- Fix: thêm guard `if (end >= text.length) break;` sau khi tạo chunk cuối cùng.
+
+### Canonical Startup Flow (ChatBloc)
+
+- `ChatBloc` giờ có enum state `checkingStartup` → `needsDownload` | `ready`.
+- Startup event kiểm tra model file và indexed docs **song song** (`Future.wait`).
+- Nếu model file tồn tại → tự động gọi preload (không cần user tap "Load Model").
+- Nếu model file không tồn tại → emit `needsDownload` → hiện CTA tải xuống.
+- **Không** gộp download vào `ensureModelLoaded()` — download luôn là explicit user action.
+
+### App Lifecycle Observer
+
+- `ChatScreen` implement `WidgetsBindingObserver`.
+- `AppLifecycleState.paused` → dispatch `AppBackgrounded` → `ChatBloc` gọi `modelLoader.release()`.
+- `AppLifecycleState.resumed` → dispatch `AppForegrounded` → `ChatBloc` tự động preload lại model nếu đã download.
+- iOS không support streaming khi background → release sớm, reload khi foreground là correct behavior.
+
+### Streaming Update Batching
+
+- Trước: mỗi token emit ngay vào `BlocBuilder` → quá nhiều rebuild.
+- Sau: `_tokenBuffer` (StringBuffer) tích lũy tokens, `_flushTimer` (100ms periodic) emit batch state.
+- Khi generation done, flush ngay lập tức và cancel timer.
+- **Gotcha**: phải cancel timer trong `close()` của Bloc để tránh memory leak.
+
+### Token Budget Allocator
+
+- File mới: `lib/features/chat/bloc/token_budget_allocator.dart`.
+- Quản lý context window 8K tokens của Gemma 4 E2B.
+- Phân bổ: `systemPrompt` (fixed) → `ragContext` (dynamic) → `conversationHistory` (trimmed từ cuối) → `responseHeadroom` (reserved).
+- `trimHistory(messages, budget)`: cắt lịch sử từ đầu cho đến khi vừa budget, luôn giữ message gần nhất.
+- **Gotcha**: token count ước lượng bằng `text.length ~/ 4` (1 token ≈ 4 chars) — đủ cho prototype, không cần tokenizer thật.
+
+### Architecture Decisions Confirmed
+
+| Component | Decision | Reason |
+|-----------|----------|--------|
+| RAG persistence | Flat JSON tại ApplicationSupport | Không cần external DB, đủ cho prototype |
+| Lifecycle management | WidgetsBindingObserver trong ChatScreen | Tách UI concern ra khỏi Bloc |
+| Streaming batching | 100ms timer trong ChatBloc | Giảm rebuild, cải thiện rendering performance |
+| Token budgeting | Riêng class `TokenBudgetAllocator` | Testable, tách khỏi generation logic |
+| Model preload | Tự động khi startup detect file exists | UX tốt hơn, không cần user tap thủ công |
+
+### Files Changed (2026-06-06)
+
+| File | Action | Summary |
+|------|--------|---------|
+| `lib/features/rag/indexer/text_chunker.dart` | Modified | Fix infinite loop khi text ngắn hơn chunk size |
+| `lib/features/rag/vector_store/vector_store.dart` | Modified | Thêm `saveToDisk()` / `loadFromDisk()`, auto-persist mutations |
+| `lib/features/chat/bloc/chat_state.dart` | Modified | Thêm `checkingStartup`, `needsDownload` enum values |
+| `lib/features/chat/bloc/chat_event.dart` | Modified | Thêm `AppBackgrounded`, `AppForegrounded`, lifecycle events |
+| `lib/features/chat/bloc/chat_bloc.dart` | Modified | Token budgeting, flush timer, startup flow, lifecycle handlers |
+| `lib/features/rag/retriever/rag_retriever.dart` | Modified | Expose `vectorStore` getter cho startup load |
+| `lib/features/chat/screens/chat_screen.dart` | Modified | WidgetsBindingObserver, startup state UI, needsDownload CTA |
+| `lib/features/chat/bloc/token_budget_allocator.dart` | **Created** | Context window manager — 8K budget, system/rag/history/response slots |
+
+---
+
 ## Context Window Notes
 
 Đây là project **research + prototype**, không phải production delivery.

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:slm_app/core/channels/inference_service.dart';
 import 'package:slm_app/core/channels/mock_inference_service.dart';
@@ -16,6 +17,9 @@ import 'package:slm_app/features/rag/vector_store/vector_store.dart';
 class FakeModelLoader implements ModelLoader {
   bool _isLoaded = false;
   int ensureLoadCalls = 0;
+
+  /// Reset the call counter (use after waiting for startup to complete).
+  void resetLoadCounter() => ensureLoadCalls = 0;
 
   @override
   bool get isLoaded => _isLoaded;
@@ -99,6 +103,18 @@ class ControlledInferenceService implements InferenceService {
 }
 
 void main() {
+  // Initialize Flutter binding so platform-channel-dependent code (path_provider,
+  // MethodChannel) is available in unit tests.
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  /// Wait until [bloc] reaches [ChatStatus.ready] (startup completed).
+  Future<void> waitForReady(ChatBloc bloc) => expectLater(
+        bloc.stream,
+        emitsThrough(
+          predicate<ChatState>((s) => s.status == ChatStatus.ready),
+        ),
+      );
+
   group('ChatBloc and RAG Integration Tests', () {
     late MockInferenceService mockInferenceService;
     late FakeModelLoader fakeModelLoader;
@@ -113,7 +129,9 @@ void main() {
       mockInferenceService = MockInferenceService();
       fakeModelLoader = FakeModelLoader();
       mockEmbeddingService = MockEmbeddingService();
-      vectorStore = VectorStore();
+      // Use NullVectorStorePersistence so saveToDisk/loadFromDisk are no-ops
+      // in unit tests and never block on path_provider's platform channel.
+      vectorStore = VectorStore(persistence: NullVectorStorePersistence());
       documentIndexer = DocumentIndexer(
         embedder: mockEmbeddingService,
         vectorStore: vectorStore,
@@ -171,6 +189,13 @@ void main() {
     test(
       'PreloadModel loads the model without sending a chat message',
       () async {
+        // Wait for StartupRequested (dispatched in constructor) to complete.
+        // FakeModelLoader.isModelDownloaded() returns true, so startup itself
+        // calls ensureModelLoaded() once. Reset the counter before the
+        // explicit PreloadModel dispatch so we only count that one call.
+        await waitForReady(chatBloc);
+        fakeModelLoader.resetLoadCounter();
+
         chatBloc.add(const PreloadModel());
 
         await expectLater(
@@ -202,6 +227,11 @@ void main() {
         );
 
         addTearDown(cancelBloc.close);
+
+        // Wait for startup to complete (constructor dispatches StartupRequested).
+        // Without this, SendMessage may be ignored because the Bloc is still
+        // in checkingStartup / loadingModel state.
+        await waitForReady(cancelBloc);
 
         cancelBloc.add(const SendMessage('Explain offline inference'));
 

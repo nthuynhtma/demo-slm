@@ -13,16 +13,32 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      context.read<ChatBloc>().add(const AppBackgrounded());
+    } else if (state == AppLifecycleState.resumed) {
+      context.read<ChatBloc>().add(const AppForegrounded());
+    }
   }
 
   void _scrollToBottom() {
@@ -114,8 +130,11 @@ class _ChatScreenState extends State<ChatScreen> {
             BlocBuilder<ChatBloc, ChatState>(
               builder: (context, state) {
                 String statusText = 'No Model';
-                Color statusColor = Colors.grey;
-                if (state.isDownloading) {
+                Color statusColor = Colors.red;
+                if (state.status == ChatStatus.checkingStartup) {
+                  statusText = 'Checking';
+                  statusColor = Colors.grey;
+                } else if (state.isDownloading) {
                   statusText = 'Downloading';
                   statusColor = Colors.orange;
                 } else if (state.status == ChatStatus.loadingModel) {
@@ -127,8 +146,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 } else if (state.isModelDownloaded) {
                   statusText = 'Downloaded';
                   statusColor = Colors.blue;
+                } else if (state.status == ChatStatus.needsDownload) {
+                  statusText = 'No Model';
+                  statusColor = Colors.red;
                 }
-
+ 
                 return Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
@@ -263,6 +285,96 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
               },
               builder: (context, state) {
+                if (state.status == ChatStatus.checkingStartup) {
+                  return Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Initializing on-device components...',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                if (state.status == ChatStatus.needsDownload || state.isDownloading) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Card(
+                        elevation: 4,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(32.0),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.15),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.cloud_download_outlined,
+                                  size: 48,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                              ),
+                              const SizedBox(height: 24),
+                              Text(
+                                'On-Device AI Model Required',
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'To start chatting completely offline, you need to download the Gemma 4 E2B model (~2.6 GB). This will be cached locally on your device.',
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                              const SizedBox(height: 24),
+                              if (state.isDownloading) ...[
+                                Text(
+                                  'Downloading... ${(state.downloadProgress * 100).toStringAsFixed(1)}%',
+                                  style: const TextStyle(fontWeight: FontWeight.w600),
+                                ),
+                                const SizedBox(height: 12),
+                                LinearProgressIndicator(value: state.downloadProgress),
+                              ] else
+                                ElevatedButton.icon(
+                                  onPressed: () {
+                                    context.read<ChatBloc>().add(const DownloadModel());
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(30),
+                                    ),
+                                  ),
+                                  icon: const Icon(Icons.download),
+                                  label: const Text('Download Model (~2.6GB)'),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }
+
                 if (state.messages.isEmpty) {
                   return Center(
                     child: Column(
@@ -321,49 +433,57 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
 
           // Input bar
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 10,
-                  offset: const Offset(0, -2),
+          BlocBuilder<ChatBloc, ChatState>(
+            builder: (context, state) {
+              final isGenerating = state.status == ChatStatus.generating;
+              final isLoadingModel = state.status == ChatStatus.loadingModel;
+              final isChecking = state.status == ChatStatus.checkingStartup;
+              final needsDownload = state.status == ChatStatus.needsDownload || state.isDownloading;
+              final canSend = !isGenerating && !isLoadingModel && !isChecking && !needsDownload && state.isModelLoaded;
+
+              return Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).scaffoldBackgroundColor,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 10,
+                      offset: const Offset(0, -2),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: SafeArea(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _inputController,
-                      decoration: const InputDecoration(
-                        hintText: 'Type a message...',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.all(Radius.circular(24)),
-                        ),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 12,
+                child: SafeArea(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _inputController,
+                          enabled: canSend,
+                          decoration: InputDecoration(
+                            hintText: needsDownload
+                                ? 'Download model to start chatting'
+                                : (isLoadingModel
+                                    ? 'Loading model into memory...'
+                                    : (isChecking
+                                        ? 'Initializing...'
+                                        : 'Type a message...')),
+                            border: const OutlineInputBorder(
+                              borderRadius: BorderRadius.all(Radius.circular(24)),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 12,
+                            ),
+                          ),
+                          maxLines: 4,
+                          minLines: 1,
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => canSend ? _onSend() : null,
                         ),
                       ),
-                      maxLines: 4,
-                      minLines: 1,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _onSend(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  BlocBuilder<ChatBloc, ChatState>(
-                    builder: (context, state) {
-                      final isGenerating =
-                          state.status == ChatStatus.generating;
-                      final isLoadingModel =
-                          state.status == ChatStatus.loadingModel;
-                      final canSend = !isGenerating && !isLoadingModel;
-                      return CircleAvatar(
+                      const SizedBox(width: 8),
+                      CircleAvatar(
                         radius: 24,
                         backgroundColor: canSend
                             ? Theme.of(context).colorScheme.primary
@@ -377,8 +497,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                     const CancelGeneration(),
                                   );
                                 }
-                              : (isLoadingModel ? null : _onSend),
-                          icon: isLoadingModel
+                              : (canSend ? _onSend : null),
+                          icon: isLoadingModel || isChecking
                               ? const SizedBox(
                                   width: 20,
                                   height: 20,
@@ -392,15 +512,15 @@ class _ChatScreenState extends State<ChatScreen> {
                                       ? Theme.of(
                                           context,
                                         ).colorScheme.onErrorContainer
-                                      : Colors.white,
+                                      : (canSend ? Colors.white : Colors.grey),
                                 ),
                         ),
-                      );
-                    },
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           ),
         ],
       ),

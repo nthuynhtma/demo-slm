@@ -55,8 +55,8 @@ class TextChunker {
       }
 
       index++;
+      if (end >= text.length) break;
       start = end - overlapChars;
-      if (start >= text.length) break;
       if (start < 0) start = 0;
     }
 

@@ -3,6 +3,12 @@ import '../models/chat_message.dart';
 
 /// Possible statuses for the chat feature.
 enum ChatStatus {
+  /// Checking model status and document indexing status at startup.
+  checkingStartup,
+
+  /// Model is not downloaded yet; requires user download prompt/CTA.
+  needsDownload,
+
   /// Ready to accept user input.
   ready,
 
@@ -30,7 +36,7 @@ class ChatState extends Equatable {
   final double? indexingProgress;
 
   const ChatState({
-    this.status = ChatStatus.ready,
+    this.status = ChatStatus.checkingStartup,
     this.messages = const [],
     this.errorMessage,
     this.useRag = false,
