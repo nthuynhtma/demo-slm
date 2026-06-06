@@ -415,6 +415,66 @@ App Background
 - **DownloadComplete → PreloadModel tự động**: Không còn step "tap Load Model" sau download.
 - **Kiểm tra background task khi startup**: `ChatBloc` startup check `getActiveDownloadUpdate()` để UI hiển thị đúng trạng thái nếu app restart giữa lúc download.
 
+## Implementation Sync Notes (2026-06-06) — iOS Build Fix (SPM deployment target)
+
+### 🔴 Lỗi build iOS thực tế gây fail
+
+- **Triệu chứng**: `flutter run -d <iPhone>` fail với lỗi:
+  ```
+  Target Integrity (Xcode): The package product 'background-downloader' requires
+  minimum platform version 14.0 for the iOS platform, but this target supports 13.0
+  Failed to build iOS app — Could not build the precompiled application for the device.
+  ```
+- **Warning đi kèm** (chưa phải lỗi, chỉ deprecation):
+  ```
+  The following plugins do not support Swift Package Manager for ios:
+    - flutter_secure_storage
+  This will become an error in a future version of Flutter.
+  ```
+
+### 🛠️ Root cause
+
+- `ios/Runner.xcodeproj/project.pbxproj` có **3 chỗ** đặt `IPHONEOS_DEPLOYMENT_TARGET = 13.0`
+  (cho Runner target Debug / Profile / Release config ở PBXProject level).
+- `ios/Podfile` đã khai báo `platform :ios, '16.0'`, **NHƯNG** deployment target thực tế
+  trong Xcode project vẫn ở 13.0. Khi Flutter dùng **Swift Package Manager (SPM)**
+  cho `background_downloader` (lỗi SPM), target lấy từ **Xcode project**, không phải Podfile.
+- `background_downloader` 9.x chỉ ship qua SPM (không còn CocoaPods), yêu cầu iOS 14.0+.
+- Memory.md đã xác định project cần **iOS 16+** cho LiteRT-LM và Core ML delegate.
+
+### ✅ Fix đã áp dụng
+
+| File | Thay đổi |
+|------|----------|
+| `ios/Runner.xcodeproj/project.pbxproj` | Tăng `IPHONEOS_DEPLOYMENT_TARGET` từ `13.0` → `16.0` ở 3 config (Debug, Profile, Release) |
+| `ios/Flutter/AppFrameworkInfo.plist` | Thêm `<key>MinimumOSVersion</key><string>16.0</string>` |
+| `ios/Podfile` | Thêm `post_install` hook enforce tất cả Pods target `IPHONEOS_DEPLOYMENT_TARGET` >= 16.0 (dùng `Gem::Version` compare) |
+
+### 📋 Các bước đã thực hiện
+
+1. `sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 16.0;/g' ios/Runner.xcodeproj/project.pbxproj`
+2. Thêm key `MinimumOSVersion = 16.0` vào `ios/Flutter/AppFrameworkInfo.plist`
+3. Cập nhật `post_install` trong `ios/Podfile` để tự động enforce tối thiểu 16.0 cho mọi Pods
+4. `flutter clean` + `flutter pub get` + `cd ios && pod install`
+5. Verify: `grep IPHONEOS_DEPLOYMENT_TARGET ios/Pods/Pods.xcodeproj/project.pbxproj | sort -u` → chỉ còn duy nhất `16.0`
+
+### 🆕 Gotchas mới
+
+- **SPM lấy deployment target từ Xcode project, không từ Podfile**: Khi plugin dùng Swift Package Manager (như `background_downloader` 9.x), Xcode sẽ kiểm tra `IPHONEOS_DEPLOYMENT_TARGET` của Runner target trong `project.pbxproj`. Nếu chỉ sửa `Podfile` thì **không đủ** — phải sửa cả Xcode project.
+- **`AppFrameworkInfo.plist` cần `MinimumOSVersion`**: Flutter tự động thêm key này từ `IPHONEOS_DEPLOYMENT_TARGET` của Xcode project, nhưng nên khai báo tường minh trong plist để tránh Xcode tự default về 13.0.
+- **Post_install hook bắt buộc cho mọi project có Pods**: Sau khi `pod install`, CocoaPods sinh `Pods.xcodeproj` với deployment target của từng Pod. Một số Pods (vd `flutter_secure_storage` core ở 9.0) sẽ dùng target thấp — nên enforce min 16.0 trong `post_install` để đồng bộ.
+- **`flutter_secure_storage` không support SPM** là warning, không phải lỗi hiện tại. Flutter tự động fallback CocoaPods cho plugin này. Theo docs sẽ thành lỗi trong tương lai — theo dõi upstream để migrate khi cần.
+- **Pre-existing analyzer warnings** (13 issues, 0 errors) không liên quan đến build fix: `unnecessary_non_null_assertion`, `use_super_parameters`, `unused_element`, `await_only_futures`. Đã có trước fix, sẽ refactor sau.
+
+### 🧪 Verify pass
+
+- `flutter pub get` → success (chỉ warning về flutter_secure_storage SPM, không phải lỗi)
+- `pod install` → 4 pods installed (Flutter, MediaPipeTasksGenAI 0.10.35, MediaPipeTasksGenAIC 0.10.35, flutter_secure_storage 6.0.0)
+- `flutter analyze` → 13 pre-existing issues, **0 errors**
+- Tất cả Pods deployment target đồng bộ về 16.0
+
+---
+
 ## Context Window Notes
 
 Đây là project **research + prototype**, không phải production delivery.

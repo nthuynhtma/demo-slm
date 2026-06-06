@@ -224,29 +224,46 @@ That is acceptable during migration, but the behavior must move toward the workf
 - `rules/flutter-patterns.md`
 - `skills/model-loader.md`
 - `skills/ios-litert-bridge.md`
+---
 
-## Implementation Status (updated 2026-06-06)
+## Implementation Status
 
-All six architectural tasks from the ADR-2026-06-05 migration plan have been implemented.
+**Latest Update**: 2026-06-06 — All 8 architectural tasks completed ✅
 
-| # | Task | Status | Key files |
-|---|------|--------|-----------|
-| 1 | Fix TextChunker infinite loop (short text ≤ 448 chars) | ✅ Done | `rag/indexer/text_chunker.dart` |
-| 2 | Durable Vector Store — persist to `rag_store.json` | ✅ Done | `rag/vector_store/vector_store.dart` |
-| 3 | Canonical Startup Flow (`checkingStartup` → `needsDownload` / auto-preload) | ✅ Done | `chat/bloc/chat_bloc.dart`, `chat_state.dart`, `chat_screen.dart` |
-| 4 | App Lifecycle Observer — release model on background, reload on foreground | ✅ Done | `chat/screens/chat_screen.dart`, `chat/bloc/chat_bloc.dart` |
-| 5 | Streaming Update Batching — 100 ms flush timer (`_tokenBuffer`) | ✅ Done | `chat/bloc/chat_bloc.dart` |
-| 6 | Token Budget Allocator — 8 K context window management | ✅ Done | `chat/bloc/token_budget_allocator.dart` |
-| 7 | Test suite — fix hanging `IndexDocument` test via `NullVectorStorePersistence` | ✅ Done | `test/rag_chat_test.dart`, `vector_store.dart` |
-| 8 | Background Downloader Migration — Dio → `background_downloader` | ✅ Done | `model_downloader.dart`, `model_loader.dart`, `chat_bloc.dart`, `chat_event.dart`, `chat_state.dart`, `chat_screen.dart`, `main.dart`, `AndroidManifest.xml` |
+For detailed implementation tracking with decisions, rationale, and phase notes:
+- **Refer to**: `/memories/repo/` files (decision history, implementation sync notes, gotchas)
+- **Refer to**: `rules/` files (platform setup, patterns, constraints)
+- **Refer to**: `lib/` source code (current implementation)
 
-### Architecture notes
-- `VectorStore` now accepts an optional `VectorStorePersistence` backend.
-  - Production default: `DiskVectorStorePersistence` (path_provider → ApplicationSupport).
-  - Unit tests inject `NullVectorStorePersistence` to avoid Flutter-binding requirement.
-- `ChatBloc` constructor dispatches `StartupRequested`; tests must call
-  `TestWidgetsFlutterBinding.ensureInitialized()` at the top of `main()`.
-- **Download engine**: `background_downloader` replaces Dio. Download updates flow: native engine → `FileDownloader().updates` stream → `ModelDownloader._handleStatusUpdate()` → `StreamController.broadcast()` → `ModelLoader.downloadUpdates` → `ChatBloc._downloadSubscription` → `DownloadUpdateReceived` event → state machine transitions.
-- **Pause/Resume/Cancel**: Exposed as `ChatEvent` handlers mapped to `ModelDownloader.pauseDownload()/resumeDownload()/cancelDownload()`. UI buttons in both main screen and drawer.
-- **Android permission**: `POST_NOTIFICATIONS` required in `AndroidManifest.xml` for background download notifications on Android 13+.
-- **Init order**: `main()` is now `async`; `modelDownloader.initialize()` must be called before `runApp()` to configure notifications and subscribe to background updates.
+Key milestones:
+- ✅ Model lifecycle (download → preload → release)
+- ✅ Startup flow (parallel checks, auto-preload)
+- ✅ Generation pipeline (ensure-loaded → retrieve → budget → generate → batch → finalize)
+- ✅ Streaming batching (100ms flush)
+- ✅ Token budgeting (8K context window)
+- ✅ Background downloader (pause/resume/cancel)
+- ✅ RAG persistence (durable vector store)
+- ✅ iOS platform (SPM deployment target fix)
+
+### Key Implementation Patterns
+
+**Model & Download**:
+- `background_downloader` native engine survives app suspend/terminate
+- `ModelDownloader` → `ModelLoader` → `ChatBloc` event flow
+- Status machine: `none → enqueued → downloading → paused → complete | failed | canceled`
+- Download complete auto-triggers `PreloadModel` event
+
+**Streaming & UI**:
+- Native tokens buffered in Dart (100ms flush timer)
+- Batched commits to `ChatState` (reduces rebuilds)
+- Finalization flushes remainder before terminal state
+
+**Testing**:
+- `VectorStore` pluggable persistence (`DiskVectorStorePersistence` vs `NullVectorStorePersistence`)
+- `ChatBloc` auto-dispatches `StartupRequested` in constructor
+- Tests must call `TestWidgetsFlutterBinding.ensureInitialized()`
+
+**Platform**:
+- Android: `POST_NOTIFICATIONS` permission required (Android 13+)
+- iOS: SPM deployment target `16.0+` (enforced via Podfile post_install hook)
+- `main()` async: `modelDownloader.initialize()` before `runApp()`

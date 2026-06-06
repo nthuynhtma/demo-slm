@@ -45,5 +45,13 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    # Enforce iOS 16.0 deployment target cho tất cả Pods (LiteRT-LM yêu cầu iOS 16+).
+    # background_downloader SPM package yêu cầu tối thiểu iOS 14.0, nhưng toàn bộ project
+    # dùng iOS 16 để đồng bộ với MediaPipeTasksGenAI 0.10.35.
+    target.build_configurations.each do |config|
+      if Gem::Version.new(config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] || '0') < Gem::Version.new('16.0')
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+      end
+    end
   end
 end
