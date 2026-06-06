@@ -34,8 +34,8 @@ target 'Runner' do
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
   # MediaPipe GenAI cho LiteRT-LM
-  pod 'MediaPipeTasksGenAI',  '~> 0.10'
-  pod 'MediaPipeTasksGenAIC', '~> 0.10'
+  pod 'MediaPipeTasksGenAI',  '0.10.35'
+  pod 'MediaPipeTasksGenAIC', '0.10.35'
 
   target 'RunnerTests' do
     inherit! :search_paths

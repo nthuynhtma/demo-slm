@@ -128,8 +128,8 @@ Chat / App Workflow Coordinator (flutter_bloc)
 | Layer | Technology |
 |-------|------------|
 | UI | Flutter 3.x, flutter_bloc |
-| Inference | LiteRT-LM via platform channels |
-| Model | `litert-community/gemma-4-E2B-it-litert-lm` |
+| Inference | LiteRT-LM via platform channels (0.10.36) |
+| Model | `litert-community/gemma-4-E2B-it-litert-lm` (text-only .litertlm) |
 | Mobile model artifact | `.litertlm` |
 | Web artifact | `.task` |
 | Embedding | MiniLM via `fonnx` or another local embedding runtime |
@@ -169,7 +169,9 @@ That is acceptable during migration, but the behavior must move toward the workf
 
 - The mobile source-of-truth model format is `.litertlm`.
 - The preferred Hugging Face repo is `litert-community/gemma-4-E2B-it-litert-lm`.
-- iOS uses session-based generation for `MediaPipeTasksGenAI 0.10.35`.
+- iOS uses session-based generation for `MediaPipeTasksGenAI 0.10.36`.
+- Android uses `tasks-genai:0.10.36`.
+- Version 0.10.36 required để support `STABLEHLO_COMPOSITE` op trong model .litertlm.
 - Startup, typing preload, generation staging, streaming batching, and background release are now first-class architecture decisions.
 - Documentation may lead implementation during this migration; implementation changes should align to docs in a phased manner.
 

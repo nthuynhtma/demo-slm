@@ -131,6 +131,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           : null;
 
       // Step 3: Allocate token budgets
+      // NOTE: currentQuery is always the original queryText to avoid
+      // double-counting the RAG context tokens (the allocator already
+      // accounts for ragContextCost separately).
       final history = state.messages.length > 2
           ? state.messages.sublist(0, state.messages.length - 2)
           : <ChatMessage>[];
@@ -140,13 +143,15 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         history: history,
         systemPrompt: _systemPrompt,
         retrievedContext: retrievedContextText,
-        currentQuery: queryText,
+        currentQuery: queryText, // ← always original query, not RAG-concatenated
       );
 
-      final queryToSend = retrievedContextText ?? queryText;
+      // Build the prompt with RAG context prepended to user message
+      // (the model receives the retrieved context as part of the user turn)
+      final queryForPrompt = retrievedContextText ?? queryText;
       final promptMessagesForGeneration = [
         ...budgetedHistory,
-        userMessage.copyWith(text: queryToSend),
+        userMessage.copyWith(text: queryForPrompt),
       ];
 
       final prompt = _buildPromptFromMessages(promptMessagesForGeneration);
@@ -247,6 +252,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     if (_flushTimer == null) {
       _flushTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+        // Use add() to dispatch through the Bloc event loop so that
+        // emit() is always called with a valid Emitter context.
+        // The Bloc event loop handles isClosed checks internally.
         add(const FlushTokens());
       });
     }
@@ -268,7 +276,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       lastMessage.copyWith(text: lastMessage.text + textToFlush),
     ];
 
-    emit(state.copyWith(messages: updatedMessages));
+    // Guard against emit after close — if the Bloc was closed between
+    // the timer firing and this handler running, emit() would throw.
+    if (!isClosed) {
+      emit(state.copyWith(messages: updatedMessages));
+    }
   }
 
   void _onStreamComplete(StreamComplete event, Emitter<ChatState> emit) {
@@ -529,10 +541,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       }
 
       // 2. Parallel check of model downloaded and document count
-      final isDownloaded = await _modelLoader.isModelDownloaded();
-      final docCount = _documentIndexer != null
-          ? await _documentIndexer!.documentCount
-          : 0;
+      final results = await Future.wait([
+        _modelLoader.isModelDownloaded(),
+        _documentIndexer != null ? _documentIndexer!.documentCount : Future<int>.value(0),
+      ]);
+      final isDownloaded = results[0] as bool;
+      final docCount = results[1] as int;
 
       emit(
         state.copyWith(
@@ -569,8 +583,28 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     AppBackgrounded event,
     Emitter<ChatState> emit,
   ) async {
+    // Cancel generation inline — await the cancellation fully before
+    // unloading the model to avoid a race between the two operations.
     if (state.status == ChatStatus.generating) {
-      add(const CancelGeneration());
+      _flushTimer?.cancel();
+      _flushTimer = null;
+
+      final remainingText = _tokenBuffer.toString();
+      _tokenBuffer.clear();
+
+      await _inferenceSubscription?.cancel();
+      _inferenceSubscription = null;
+      await _inferenceService.cancelGeneration();
+
+      emit(
+        state.copyWith(
+          messages: _finalizeStreamingMessagesWithText(
+            state.messages,
+            remainingText,
+          ),
+          clearError: true,
+        ),
+      );
     }
 
     if (_modelLoader.isLoaded) {

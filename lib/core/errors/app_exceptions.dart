@@ -38,3 +38,14 @@ class RagException extends AppException {
   RagException(String message, {String? code})
       : super(message, code: code ?? 'RAG_ERROR');
 }
+
+/// Thrown when [ModelLoader.ensureModelLoaded] is called but the model
+/// has not been downloaded yet. The caller should prompt the user to
+/// download first rather than triggering a silent download.
+class ModelNotDownloadedException extends AppException {
+  ModelNotDownloadedException()
+      : super(
+          'Model not downloaded. Call downloadModel() first.',
+          code: 'MODEL_NOT_DOWNLOADED',
+        );
+}

@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:slm_app/core/channels/inference_service.dart';
 import 'package:slm_app/core/channels/mock_inference_service.dart';

@@ -45,6 +45,10 @@ void main() {
       ),
     );
 
+    // Wait for async startup (StartupRequested dispatched in constructor)
+    // to complete so the UI reaches the ready state with empty messages.
+    await tester.pumpAndSettle();
+
     // Verify empty state UI elements are shown.
     // The text is in a single Text widget with a newline separator.
     expect(find.textContaining('Gemma 4 E2B'), findsOneWidget);

@@ -1,4 +1,5 @@
 import '../../../core/channels/inference_service.dart';
+import '../../../core/errors/app_exceptions.dart';
 import '../download/model_downloader.dart';
 
 /// Service that orchestrates model lifecycle (download → load → dispose).
@@ -26,22 +27,24 @@ class ModelLoader {
 
   /// Ensure the model is downloaded and loaded.
   ///
-  /// If the model is not yet downloaded, it will be fetched first.
-  /// [onDownloadProgress] reports download progress (0.0 - 1.0).
+  /// Throws [ModelNotDownloadedException] if the model has not been
+  /// downloaded yet. Callers (e.g. ChatBloc) are responsible for
+  /// checking [isModelDownloaded] first and prompting the user before
+  /// calling this method.
   Future<void> ensureModelLoaded({
     void Function(double progress)? onDownloadProgress,
   }) async {
     if (_isLoaded) return;
 
-    // Step 1: Get or download the model file
+    // Step 1: Check that the model file exists on disk
     final hasDownloadedModel = await _downloader.isModelDownloaded();
-    final modelPath = hasDownloadedModel
-        ? await _downloader.getCachedModelPath()
-        : null;
-    final path = modelPath ??
-        await _downloader.downloadModel(onProgress: onDownloadProgress);
+    if (!hasDownloadedModel) {
+      throw ModelNotDownloadedException();
+    }
+    // Step 2: Path is non-null because isModelDownloaded() returned true above
+    final path = (await _downloader.getCachedModelPath())!;
 
-    // Step 2: Load the model into LiteRT-LM engine
+    // Step 3: Load the model into LiteRT-LM engine
     // loadModel() throws on failure
     await _inferenceService.loadModel(path);
 

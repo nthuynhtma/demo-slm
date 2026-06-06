@@ -56,7 +56,7 @@ android {
 
 dependencies {
     // LiteRT-LM inference engine (MediaPipe Tasks GenAI)
-    implementation("com.google.mediapipe:tasks-genai:0.10.22")
+    implementation("com.google.mediapipe:tasks-genai:0.10.35")
 
     // Coroutines cho async operations
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
