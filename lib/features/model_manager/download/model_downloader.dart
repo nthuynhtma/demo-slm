@@ -1,58 +1,159 @@
+import 'dart:async';
 import 'dart:io';
-import 'package:dio/dio.dart';
+import 'package:background_downloader/background_downloader.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:crypto/crypto.dart';
 import '../../../core/errors/app_exceptions.dart';
 
+enum ModelDownloadStatus {
+  none,
+  enqueued,
+  downloading,
+  paused,
+  complete,
+  failed,
+  canceled,
+}
+
+class ModelDownloadUpdate {
+  final ModelDownloadStatus status;
+  final double progress;
+  final String? errorMessage;
+
+  const ModelDownloadUpdate({
+    required this.status,
+    required this.progress,
+    this.errorMessage,
+  });
+}
+
 /// Handles downloading Gemma 4 E2B model files from HuggingFace.
 ///
-/// Supports resumable downloads, progress tracking, storage check, and checksum verification.
+/// Uses background_downloader to manage downloads natively in the background,
+/// enabling downloads to survive app suspension/termination.
 class ModelDownloader {
-  final Dio _dio;
   final FlutterSecureStorage _secureStorage;
+  final StreamController<ModelDownloadUpdate> _updatesController =
+      StreamController<ModelDownloadUpdate>.broadcast();
+
+  static const String taskId = 'gemma_4_e2b_download';
 
   /// HuggingFace repo for LiteRT-LM compatible Gemma 4 E2B model.
   static const String defaultModelUrl =
       'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
 
   ModelDownloader({
-    Dio? dio,
     FlutterSecureStorage? secureStorage,
-  })  : _dio = dio ?? Dio(),
-        _secureStorage = secureStorage ?? const FlutterSecureStorage();
+  }) : _secureStorage = secureStorage ?? const FlutterSecureStorage();
 
-  /// Download the model file to the app's application-support directory.
-  ///
-  /// Returns the local file path once download is complete.
-  /// [onProgress] reports download progress as a fraction (0.0 - 1.0).
-  /// [expectedSha256] can be passed to verify file integrity.
-  Future<String> downloadModel({
+  Stream<ModelDownloadUpdate> get downloadUpdates => _updatesController.stream;
+
+  ModelDownloadUpdate _lastUpdate =
+      const ModelDownloadUpdate(status: ModelDownloadStatus.none, progress: 0.0);
+
+  ModelDownloadUpdate get lastUpdate => _lastUpdate;
+
+  /// Initialize the downloader, track running tasks, and configure notifications.
+  Future<void> initialize() async {
+    // Configure notifications for background download progress
+    await FileDownloader().configureNotification(
+      running: const TaskNotification(
+        'Tải model Gemma 4 E2B',
+        'Đang tải... {progress}',
+      ),
+      complete: const TaskNotification(
+        'Tải hoàn tất',
+        'Model Gemma 4 E2B đã được tải thành công',
+      ),
+      error: const TaskNotification(
+        'Tải thất bại',
+        'Lỗi khi tải model Gemma 4 E2B',
+      ),
+      paused: const TaskNotification(
+        'Tạm dừng tải',
+        'Tiến trình tải model đã bị tạm dừng',
+      ),
+      progressBar: true,
+    );
+
+    // Track active/completed tasks enqueued in background
+    await FileDownloader().trackTasks();
+
+    // Listen to background downloader updates
+    FileDownloader().updates.listen((update) {
+      if (update.task.taskId != taskId) return;
+
+      if (update is TaskStatusUpdate) {
+        _handleStatusUpdate(update);
+      } else if (update is TaskProgressUpdate) {
+        _handleProgressUpdate(update);
+      }
+    });
+  }
+
+  /// Check if a download task is currently active or paused.
+  Future<ModelDownloadUpdate> getActiveDownloadUpdate() async {
+    final tasks = await FileDownloader().allTasks();
+    Task? task;
+    for (final t in tasks) {
+      if (t.taskId == taskId) {
+        task = t;
+        break;
+      }
+    }
+
+    if (task != null) {
+      final record = await FileDownloader().database.recordForId(taskId);
+      if (record != null) {
+        final status = record.status;
+        ModelDownloadStatus mappedStatus = ModelDownloadStatus.none;
+        if (status == TaskStatus.running) {
+          mappedStatus = ModelDownloadStatus.downloading;
+        } else if (status == TaskStatus.enqueued) {
+          mappedStatus = ModelDownloadStatus.enqueued;
+        } else if (status == TaskStatus.paused) {
+          mappedStatus = ModelDownloadStatus.paused;
+        }
+
+        _lastUpdate = ModelDownloadUpdate(
+          status: mappedStatus,
+          progress: record.progress.clamp(0.0, 1.0),
+        );
+        return _lastUpdate;
+      }
+    }
+    return const ModelDownloadUpdate(status: ModelDownloadStatus.none, progress: 0.0);
+  }
+
+  /// Initiates or resumes the background download task.
+  Future<void> downloadModel({
     String? url,
     String? expectedSha256,
-    void Function(double progress)? onProgress,
   }) async {
     final modelUrl = url ?? defaultModelUrl;
+
+    // 1. Check if final file already exists
     final dir = await getApplicationSupportDirectory();
     final fileName = 'gemma-4-E2B-it.litertlm';
     final filePath = '${dir.path}/$fileName';
-    final tempFilePath = '$filePath.tmp';
 
-    // 1. Check if final file already exists
     final finalFile = File(filePath);
     if (await finalFile.exists()) {
       if (expectedSha256 != null && expectedSha256.isNotEmpty) {
         final isValid = await verifyChecksum(filePath, expectedSha256);
         if (isValid) {
           await _secureStorage.write(key: 'model_path', value: filePath);
-          return filePath;
+          _emitUpdate(ModelDownloadStatus.complete, 1.0);
+          return;
         } else {
-          // Corrupt model, delete and download again
+          // Corrupt model, delete
           await finalFile.delete();
         }
       } else {
         await _secureStorage.write(key: 'model_path', value: filePath);
-        return filePath;
+        _emitUpdate(ModelDownloadStatus.complete, 1.0);
+        return;
       }
     }
 
@@ -65,73 +166,140 @@ class ModelDownloader {
       );
     }
 
-    try {
-      final tempFile = File(tempFilePath);
-      int existingBytes = 0;
-      if (await tempFile.exists()) {
-        existingBytes = await tempFile.length();
+    // 3. Define the download task
+    final task = DownloadTask(
+      taskId: taskId,
+      url: modelUrl,
+      filename: fileName,
+      baseDirectory: BaseDirectory.applicationSupport,
+      updates: Updates.statusAndProgress,
+      retries: 3,
+      requiresWiFi: false, // User explicitly commented "ko" to wifi limitation
+      allowPause: true,
+    );
+
+    // 4. Check if task is already running
+    final activeTasks = await FileDownloader().allTasks();
+    bool isAlreadyRunning = false;
+    for (final t in activeTasks) {
+      if (t.taskId == taskId) {
+        isAlreadyRunning = true;
+        break;
       }
+    }
 
-      // 3. Initiate chunk-by-chunk download
-      final response = await _dio.get<ResponseBody>(
-        modelUrl,
-        options: Options(
-          responseType: ResponseType.stream,
-          headers: existingBytes > 0 ? {'Range': 'bytes=$existingBytes-'} : null,
-        ),
-      );
-
-      final fileAccess = await tempFile.open(mode: FileMode.writeOnlyAppend);
-      final contentLengthHeaderList = response.data?.headers[HttpHeaders.contentLengthHeader];
-      final serverContentLength = contentLengthHeaderList != null && contentLengthHeaderList.isNotEmpty
-          ? contentLengthHeaderList.first
-          : null;
-      final totalBytes = serverContentLength != null
-          ? int.parse(serverContentLength) + existingBytes
-          : -1;
-
-      int bytesReceived = existingBytes;
-
-      await for (final chunk in response.data!.stream) {
-        await fileAccess.writeFrom(chunk);
-        bytesReceived += chunk.length;
-        if (totalBytes != -1 && onProgress != null) {
-          onProgress(bytesReceived / totalBytes);
-        }
+    if (isAlreadyRunning) {
+      final record = await FileDownloader().database.recordForId(taskId);
+      if (record != null && record.status == TaskStatus.paused) {
+        await FileDownloader().resume(task);
       }
-      await fileAccess.close();
+      return;
+    }
 
-      // 4. Verify SHA256 checksum
-      if (expectedSha256 != null && expectedSha256.isNotEmpty) {
-        onProgress?.call(0.99); // visual cue that verification is happening
-        final isValid = await verifyChecksum(tempFilePath, expectedSha256);
-        if (!isValid) {
-          await tempFile.delete();
-          throw DownloadException(
-            'Model checksum verification failed. The downloaded file might be corrupt.',
-            code: 'CHECKSUM_MISMATCH',
-          );
-        }
-      }
+    // 5. Enqueue or resume the task
+    final record = await FileDownloader().database.recordForId(taskId);
+    bool success;
+    if (record != null && record.status == TaskStatus.paused) {
+      success = await FileDownloader().resume(task);
+    } else {
+      success = await FileDownloader().enqueue(task);
+    }
 
-      // 5. Rename temporary file to final path
-      await tempFile.rename(filePath);
-
-      // Cache the path
-      await _secureStorage.write(key: 'model_path', value: filePath);
-      return filePath;
-    } on DioException catch (e) {
+    if (!success) {
       throw DownloadException(
-        'Failed to download model: ${e.message}',
-        code: 'DOWNLOAD_FAILED',
-      );
-    } catch (e) {
-      if (e is DownloadException) rethrow;
-      throw DownloadException(
-        'Unexpected error downloading model: $e',
-        code: 'UNKNOWN_DOWNLOAD_ERROR',
+        'Failed to start background download task.',
+        code: 'DOWNLOAD_START_FAILED',
       );
     }
+
+    _emitUpdate(ModelDownloadStatus.enqueued, 0.0);
+  }
+
+  Future<void> pauseDownload() async {
+    await FileDownloader().pause(_buildTask());
+  }
+
+  Future<void> resumeDownload() async {
+    await FileDownloader().resume(_buildTask());
+  }
+
+  Future<void> cancelDownload() async {
+    await FileDownloader().cancelTasksWithIds([taskId]);
+    _emitUpdate(ModelDownloadStatus.canceled, 0.0);
+  }
+
+  DownloadTask _buildTask({String? url}) {
+    return DownloadTask(
+      taskId: taskId,
+      url: url ?? defaultModelUrl,
+      filename: 'gemma-4-E2B-it.litertlm',
+      baseDirectory: BaseDirectory.applicationSupport,
+      updates: Updates.statusAndProgress,
+      retries: 3,
+      requiresWiFi: false,
+      allowPause: true,
+    );
+  }
+
+  Future<void> _handleStatusUpdate(TaskStatusUpdate update) async {
+    final status = update.status;
+    ModelDownloadStatus mappedStatus;
+    String? errorMessage;
+
+    switch (status) {
+      case TaskStatus.enqueued:
+        mappedStatus = ModelDownloadStatus.enqueued;
+        break;
+      case TaskStatus.running:
+        mappedStatus = ModelDownloadStatus.downloading;
+        break;
+      case TaskStatus.paused:
+        mappedStatus = ModelDownloadStatus.paused;
+        break;
+      case TaskStatus.complete:
+        final dir = await getApplicationSupportDirectory();
+        final filePath = '${dir.path}/gemma-4-E2B-it.litertlm';
+
+        final isValid = await verifyChecksum(filePath, 'TODO_FILL_AFTER_DOWNLOAD');
+        if (isValid) {
+          await _secureStorage.write(key: 'model_path', value: filePath);
+          mappedStatus = ModelDownloadStatus.complete;
+        } else {
+          final file = File(filePath);
+          if (await file.exists()) {
+            await file.delete();
+          }
+          mappedStatus = ModelDownloadStatus.failed;
+          errorMessage = 'Model checksum verification failed. The downloaded file might be corrupt.';
+        }
+        break;
+      case TaskStatus.failed:
+        mappedStatus = ModelDownloadStatus.failed;
+        errorMessage = update.exception?.description ?? 'Unknown download error';
+        break;
+      case TaskStatus.canceled:
+        mappedStatus = ModelDownloadStatus.canceled;
+        break;
+      default:
+        mappedStatus = ModelDownloadStatus.none;
+    }
+
+    _emitUpdate(mappedStatus, _lastUpdate.progress, errorMessage);
+  }
+
+  void _handleProgressUpdate(TaskProgressUpdate update) {
+    if (_lastUpdate.status == ModelDownloadStatus.complete) return;
+    final progress = update.progress.clamp(0.0, 1.0);
+    _emitUpdate(_lastUpdate.status, progress);
+  }
+
+  void _emitUpdate(ModelDownloadStatus status, double progress, [String? errorMessage]) {
+    _lastUpdate = ModelDownloadUpdate(
+      status: status,
+      progress: progress,
+      errorMessage: errorMessage,
+    );
+    _updatesController.add(_lastUpdate);
   }
 
   /// Check if a model file has been downloaded and exists on disk.
@@ -150,6 +318,7 @@ class ModelDownloader {
 
   /// Delete the downloaded model file to free up storage.
   Future<bool> deleteModel() async {
+    await cancelDownload();
     final path = await getCachedModelPath();
     if (path == null) return false;
 
@@ -168,7 +337,6 @@ class ModelDownloader {
   /// Verify model integrity using streaming SHA256 hashing to avoid OOM.
   Future<bool> verifyChecksum(String filePath, String expectedSha256) async {
     if (expectedSha256.isEmpty || expectedSha256 == 'TODO_FILL_AFTER_DOWNLOAD') {
-      // Calculate and log for debug purposes, but bypass hard block
       try {
         final calculated = await _calculateSha256(File(filePath));
         stderr.writeln('Calculated model SHA-256: $calculated');

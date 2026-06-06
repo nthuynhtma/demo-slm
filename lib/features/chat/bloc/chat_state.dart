@@ -34,6 +34,7 @@ class ChatState extends Equatable {
   final bool isModelLoaded;
   final int documentCount;
   final double? indexingProgress;
+  final bool isDownloadPaused;
 
   const ChatState({
     this.status = ChatStatus.checkingStartup,
@@ -46,6 +47,7 @@ class ChatState extends Equatable {
     this.isModelLoaded = false,
     this.documentCount = 0,
     this.indexingProgress,
+    this.isDownloadPaused = false,
   });
 
   ChatState copyWith({
@@ -61,6 +63,7 @@ class ChatState extends Equatable {
     int? documentCount,
     double? indexingProgress,
     bool clearIndexingProgress = false,
+    bool? isDownloadPaused,
   }) {
     return ChatState(
       status: status ?? this.status,
@@ -73,6 +76,7 @@ class ChatState extends Equatable {
       isModelLoaded: isModelLoaded ?? this.isModelLoaded,
       documentCount: documentCount ?? this.documentCount,
       indexingProgress: clearIndexingProgress ? null : (indexingProgress ?? this.indexingProgress),
+      isDownloadPaused: isDownloadPaused ?? this.isDownloadPaused,
     );
   }
 
@@ -88,6 +92,7 @@ class ChatState extends Equatable {
         isModelLoaded,
         documentCount,
         indexingProgress,
+        isDownloadPaused,
       ];
 }
 

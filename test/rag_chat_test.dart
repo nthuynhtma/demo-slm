@@ -8,6 +8,7 @@ import 'package:slm_app/features/chat/bloc/chat_bloc.dart';
 import 'package:slm_app/features/chat/bloc/chat_event.dart';
 import 'package:slm_app/features/chat/bloc/chat_state.dart';
 import 'package:slm_app/features/model_manager/loader/model_loader.dart';
+import 'package:slm_app/features/model_manager/download/model_downloader.dart';
 import 'package:slm_app/features/rag/indexer/document_indexer.dart';
 import 'package:slm_app/features/rag/retriever/context_builder.dart';
 import 'package:slm_app/features/rag/retriever/rag_retriever.dart';
@@ -22,6 +23,13 @@ class FakeModelLoader implements ModelLoader {
 
   @override
   bool get isLoaded => _isLoaded;
+
+  @override
+  Stream<ModelDownloadUpdate> get downloadUpdates => const Stream.empty();
+
+  @override
+  Future<ModelDownloadUpdate> getActiveDownloadUpdate() async =>
+      const ModelDownloadUpdate(status: ModelDownloadStatus.none, progress: 0.0);
 
   @override
   Future<void> ensureModelLoaded({
@@ -43,9 +51,19 @@ class FakeModelLoader implements ModelLoader {
   Future<bool> deleteModel() async => true;
 
   @override
-  Future<String> downloadModel({
-    void Function(double progress)? onProgress,
-  }) async => 'mock_path';
+  Future<void> downloadModel({
+    String? url,
+    String? expectedSha256,
+  }) async {}
+
+  @override
+  Future<void> pauseDownload() async {}
+
+  @override
+  Future<void> resumeDownload() async {}
+
+  @override
+  Future<void> cancelDownload() async {}
 
   @override
   Future<bool> isModelDownloaded() async => true;

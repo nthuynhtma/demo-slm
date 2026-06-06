@@ -348,11 +348,43 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                               const SizedBox(height: 24),
                               if (state.isDownloading) ...[
                                 Text(
-                                  'Downloading... ${(state.downloadProgress * 100).toStringAsFixed(1)}%',
+                                  state.isDownloadPaused
+                                      ? 'Tải xuống đã tạm dừng: ${(state.downloadProgress * 100).toStringAsFixed(1)}%'
+                                      : 'Đang tải xuống... ${(state.downloadProgress * 100).toStringAsFixed(1)}%',
                                   style: const TextStyle(fontWeight: FontWeight.w600),
                                 ),
                                 const SizedBox(height: 12),
                                 LinearProgressIndicator(value: state.downloadProgress),
+                                const SizedBox(height: 20),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    if (state.isDownloadPaused)
+                                      ElevatedButton.icon(
+                                        onPressed: () {
+                                          context.read<ChatBloc>().add(const ResumeModelDownload());
+                                        },
+                                        icon: const Icon(Icons.play_arrow),
+                                        label: const Text('Tiếp tục'),
+                                      )
+                                    else
+                                      ElevatedButton.icon(
+                                        onPressed: () {
+                                          context.read<ChatBloc>().add(const PauseModelDownload());
+                                        },
+                                        icon: const Icon(Icons.pause),
+                                        label: const Text('Tạm dừng'),
+                                      ),
+                                    const SizedBox(width: 12),
+                                    OutlinedButton.icon(
+                                      onPressed: () {
+                                        context.read<ChatBloc>().add(const CancelModelDownload());
+                                      },
+                                      icon: const Icon(Icons.close),
+                                      label: const Text('Hủy'),
+                                    ),
+                                  ],
+                                ),
                               ] else
                                 ElevatedButton.icon(
                                   onPressed: () {
@@ -608,10 +640,10 @@ class _ConfigDrawer extends StatelessWidget {
     Color color = Colors.grey;
 
     if (state.isDownloading) {
-      status = 'Downloading...';
+      status = state.isDownloadPaused ? 'Download Paused' : 'Downloading...';
       details =
           '${(state.downloadProgress * 100).toStringAsFixed(1)}% complete';
-      icon = Icons.downloading_outlined;
+      icon = state.isDownloadPaused ? Icons.pause_circle_outline : Icons.downloading_outlined;
       color = Colors.orange;
     } else if (state.status == ChatStatus.loadingModel) {
       status = 'Loading...';
@@ -660,6 +692,36 @@ class _ConfigDrawer extends StatelessWidget {
             if (state.isDownloading) ...[
               const SizedBox(height: 12),
               LinearProgressIndicator(value: state.downloadProgress),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (state.isDownloadPaused)
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        context.read<ChatBloc>().add(const ResumeModelDownload());
+                      },
+                      icon: const Icon(Icons.play_arrow, size: 16),
+                      label: const Text('Resume'),
+                    )
+                  else
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        context.read<ChatBloc>().add(const PauseModelDownload());
+                      },
+                      icon: const Icon(Icons.pause, size: 16),
+                      label: const Text('Pause'),
+                    ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      context.read<ChatBloc>().add(const CancelModelDownload());
+                    },
+                    icon: const Icon(Icons.close, size: 16),
+                    label: const Text('Cancel'),
+                  ),
+                ],
+              ),
             ],
             const SizedBox(height: 16),
             if (!state.isModelDownloaded && !state.isDownloading)

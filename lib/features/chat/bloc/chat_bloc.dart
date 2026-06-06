@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/channels/inference_service.dart';
 import '../../model_manager/loader/model_loader.dart';
+import '../../model_manager/download/model_downloader.dart';
 import '../../rag/indexer/document_indexer.dart';
 import '../../rag/retriever/context_builder.dart';
 import '../../rag/retriever/rag_retriever.dart';
@@ -26,6 +27,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   final ContextBuilder? _contextBuilder;
   final Uuid _uuid = const Uuid();
   StreamSubscription<String>? _inferenceSubscription;
+  StreamSubscription<ModelDownloadUpdate>? _downloadSubscription;
   final StringBuffer _tokenBuffer = StringBuffer();
   Timer? _flushTimer;
   static const String _systemPrompt =
@@ -62,6 +64,19 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     on<AppBackgrounded>(_onAppBackgrounded);
     on<AppForegrounded>(_onAppForegrounded);
     on<FlushTokens>(_onFlushTokens);
+    on<PauseModelDownload>(_onPauseModelDownload);
+    on<ResumeModelDownload>(_onResumeModelDownload);
+    on<CancelModelDownload>(_onCancelModelDownload);
+    on<DownloadUpdateReceived>(_onDownloadUpdateReceived);
+
+    // Subscribe to model download updates
+    _downloadSubscription = _modelLoader.downloadUpdates.listen((update) {
+      add(DownloadUpdateReceived(
+        progress: update.progress,
+        status: update.status,
+        errorMessage: update.errorMessage,
+      ));
+    });
 
     // Initial check of model and RAG status
     add(const StartupRequested());
@@ -364,48 +379,120 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     DownloadModel event,
     Emitter<ChatState> emit,
   ) async {
-    if (state.isDownloading) return;
+    if (state.isDownloading && !state.isDownloadPaused) return;
     emit(
       state.copyWith(
         isDownloading: true,
+        isDownloadPaused: false,
         downloadProgress: 0.0,
         clearError: true,
       ),
     );
 
     try {
-      await _modelLoader.downloadModel(
-        onProgress: (progress) {
-          add(DownloadProgressUpdate(progress));
-        },
-      );
-
-      final isDownloaded = await _modelLoader.isModelDownloaded();
-      emit(
-        state.copyWith(
-          isDownloading: false,
-          downloadProgress: 1.0,
-          isModelDownloaded: isDownloaded,
-          status: ChatStatus.loadingModel,
-        ),
-      );
-
-      await _modelLoader.ensureModelLoaded();
-      emit(
-        state.copyWith(
-          status: ChatStatus.ready,
-          isModelLoaded: true,
-          clearError: true,
-        ),
-      );
+      await _modelLoader.downloadModel();
     } catch (e) {
       emit(
         state.copyWith(
           isDownloading: false,
+          isDownloadPaused: false,
           errorMessage: e.toString(),
           status: ChatStatus.error,
         ),
       );
+    }
+  }
+
+  void _onDownloadUpdateReceived(
+    DownloadUpdateReceived event,
+    Emitter<ChatState> emit,
+  ) {
+    final status = event.status;
+    final progress = event.progress;
+
+    switch (status) {
+      case ModelDownloadStatus.enqueued:
+        emit(state.copyWith(
+          isDownloading: true,
+          isDownloadPaused: false,
+          downloadProgress: progress,
+        ));
+        break;
+      case ModelDownloadStatus.downloading:
+        emit(state.copyWith(
+          isDownloading: true,
+          isDownloadPaused: false,
+          downloadProgress: progress,
+        ));
+        break;
+      case ModelDownloadStatus.paused:
+        emit(state.copyWith(
+          isDownloading: true,
+          isDownloadPaused: true,
+          downloadProgress: progress,
+        ));
+        break;
+      case ModelDownloadStatus.complete:
+        emit(state.copyWith(
+          isDownloading: false,
+          isDownloadPaused: false,
+          downloadProgress: 1.0,
+          isModelDownloaded: true,
+          status: ChatStatus.loadingModel,
+        ));
+        add(const PreloadModel());
+        break;
+      case ModelDownloadStatus.failed:
+        emit(state.copyWith(
+          isDownloading: false,
+          isDownloadPaused: false,
+          status: ChatStatus.error,
+          errorMessage: event.errorMessage ?? 'Download failed',
+        ));
+        break;
+      case ModelDownloadStatus.canceled:
+        emit(state.copyWith(
+          isDownloading: false,
+          isDownloadPaused: false,
+          downloadProgress: 0.0,
+          status: ChatStatus.needsDownload,
+        ));
+        break;
+      default:
+        break;
+    }
+  }
+
+  Future<void> _onPauseModelDownload(
+    PauseModelDownload event,
+    Emitter<ChatState> emit,
+  ) async {
+    try {
+      await _modelLoader.pauseDownload();
+    } catch (e) {
+      emit(state.copyWith(errorMessage: e.toString()));
+    }
+  }
+
+  Future<void> _onResumeModelDownload(
+    ResumeModelDownload event,
+    Emitter<ChatState> emit,
+  ) async {
+    try {
+      await _modelLoader.resumeDownload();
+    } catch (e) {
+      emit(state.copyWith(errorMessage: e.toString()));
+    }
+  }
+
+  Future<void> _onCancelModelDownload(
+    CancelModelDownload event,
+    Emitter<ChatState> emit,
+  ) async {
+    try {
+      await _modelLoader.cancelDownload();
+    } catch (e) {
+      emit(state.copyWith(errorMessage: e.toString()));
     }
   }
 
@@ -439,7 +526,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     DownloadProgressUpdate event,
     Emitter<ChatState> emit,
   ) {
-    emit(state.copyWith(downloadProgress: event.progress));
+    // Deprecated: updates are handled via DownloadUpdateReceived
   }
 
   Future<void> _onDeleteModel(
@@ -548,10 +635,20 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       final isDownloaded = results[0] as bool;
       final docCount = results[1] as int;
 
+      // Check if there is an active background download running or paused
+      final activeDownload = await _modelLoader.getActiveDownloadUpdate();
+      final isDownloading = activeDownload.status == ModelDownloadStatus.downloading ||
+                            activeDownload.status == ModelDownloadStatus.enqueued ||
+                            activeDownload.status == ModelDownloadStatus.paused;
+      final isPaused = activeDownload.status == ModelDownloadStatus.paused;
+
       emit(
         state.copyWith(
           isModelDownloaded: isDownloaded,
           documentCount: docCount,
+          isDownloading: isDownloading,
+          isDownloadPaused: isPaused,
+          downloadProgress: activeDownload.progress,
         ),
       );
 
@@ -631,6 +728,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   @override
   Future<void> close() async {
     _flushTimer?.cancel();
+    await _downloadSubscription?.cancel();
     await _inferenceSubscription?.cancel();
     await _modelLoader.unloadModel();
     return super.close();

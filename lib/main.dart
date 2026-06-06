@@ -15,7 +15,7 @@ import 'features/rag/retriever/context_builder.dart';
 import 'features/rag/retriever/rag_retriever.dart';
 import 'features/rag/vector_store/vector_store.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Use --dart-define=USE_MOCK=true to run with mock services
@@ -50,6 +50,7 @@ void main() {
 
   // ── Model Download / Loader ──
   final modelDownloader = ModelDownloader();
+  await modelDownloader.initialize();
   final modelLoader = ModelLoader(
     downloader: modelDownloader,
     inferenceService: inferenceService,

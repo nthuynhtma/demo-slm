@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import '../../model_manager/download/model_downloader.dart';
 
 /// Events that can be dispatched to the ChatBloc.
 sealed class ChatEvent extends Equatable {
@@ -122,4 +123,35 @@ class AppForegrounded extends ChatEvent {
 /// Flush buffered tokens to the UI state.
 class FlushTokens extends ChatEvent {
   const FlushTokens();
+}
+
+/// Pause the active background model download.
+class PauseModelDownload extends ChatEvent {
+  const PauseModelDownload();
+}
+
+/// Resume the paused background model download.
+class ResumeModelDownload extends ChatEvent {
+  const ResumeModelDownload();
+}
+
+/// Cancel the active model download.
+class CancelModelDownload extends ChatEvent {
+  const CancelModelDownload();
+}
+
+/// Event triggered when a background download update is received.
+class DownloadUpdateReceived extends ChatEvent {
+  final double progress;
+  final ModelDownloadStatus status;
+  final String? errorMessage;
+
+  const DownloadUpdateReceived({
+    required this.progress,
+    required this.status,
+    this.errorMessage,
+  });
+
+  @override
+  List<Object?> get props => [progress, status, errorMessage];
 }

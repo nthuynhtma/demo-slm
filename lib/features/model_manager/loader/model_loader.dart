@@ -20,6 +20,12 @@ class ModelLoader {
   /// Whether the model is currently loaded and ready for inference.
   bool get isLoaded => _isLoaded;
 
+  /// Stream of model download progress & status updates.
+  Stream<ModelDownloadUpdate> get downloadUpdates => _downloader.downloadUpdates;
+
+  /// Check if a download task is currently active or paused.
+  Future<ModelDownloadUpdate> getActiveDownloadUpdate() => _downloader.getActiveDownloadUpdate();
+
   /// Check if the model file exists on disk.
   Future<bool> isModelDownloaded() async {
     return await _downloader.isModelDownloaded();
@@ -65,11 +71,18 @@ class ModelLoader {
   }
 
   /// Download the model file without loading it.
-  Future<String> downloadModel({
-    void Function(double progress)? onProgress,
+  Future<void> downloadModel({
+    String? url,
+    String? expectedSha256,
   }) async {
-    return await _downloader.downloadModel(onProgress: onProgress);
+    await _downloader.downloadModel(url: url, expectedSha256: expectedSha256);
   }
+
+  Future<void> pauseDownload() => _downloader.pauseDownload();
+
+  Future<void> resumeDownload() => _downloader.resumeDownload();
+
+  Future<void> cancelDownload() => _downloader.cancelDownload();
 
   /// Check device compatibility before loading.
   ///

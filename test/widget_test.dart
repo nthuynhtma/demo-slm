@@ -6,10 +6,18 @@ import 'package:slm_app/core/channels/mock_inference_service.dart';
 import 'package:slm_app/features/chat/bloc/chat_bloc.dart';
 import 'package:slm_app/features/chat/screens/chat_screen.dart';
 import 'package:slm_app/features/model_manager/loader/model_loader.dart';
+import 'package:slm_app/features/model_manager/download/model_downloader.dart';
 
 class FakeModelLoader implements ModelLoader {
   @override
   bool get isLoaded => true;
+
+  @override
+  Stream<ModelDownloadUpdate> get downloadUpdates => const Stream.empty();
+
+  @override
+  Future<ModelDownloadUpdate> getActiveDownloadUpdate() async =>
+      const ModelDownloadUpdate(status: ModelDownloadStatus.none, progress: 0.0);
 
   @override
   Future<void> ensureModelLoaded({void Function(double progress)? onDownloadProgress}) async {}
@@ -24,7 +32,19 @@ class FakeModelLoader implements ModelLoader {
   Future<bool> deleteModel() async => true;
 
   @override
-  Future<String> downloadModel({void Function(double progress)? onProgress}) async => 'mock_path';
+  Future<void> downloadModel({
+    String? url,
+    String? expectedSha256,
+  }) async {}
+
+  @override
+  Future<void> pauseDownload() async {}
+
+  @override
+  Future<void> resumeDownload() async {}
+
+  @override
+  Future<void> cancelDownload() async {}
 
   @override
   Future<bool> isModelDownloaded() async => true;
