@@ -14,6 +14,10 @@
 | 2026-06 | **Resumable download qua Dio Range** | Hỗ trợ tải tiếp tục model 2.6GB bằng HTTP Range header để tăng độ ổn định |
 | 2026-06 | **Background downloader thay vì Dio** | `background_downloader` cho phép download sống sót qua app suspend/terminate, native notification support Android/iOS, built-in pause/resume/cancel |
 | 2026-06 | **Hệ thống UI Feedback & Centralized Logging** | Cung cấp thông báo SnackBar và log console thống nhất cho mọi hành động của người dùng. |
+| 2026-06 | **Ước lượng Token dựa trên từ (Word-based)** | Sử dụng tỉ lệ 1.3 token/từ để ước lượng chính xác hơn cho tiếng Việt và Code so với đếm ký tự. |
+| 2026-06 | **Tối ưu hóa UI Streaming (80ms)** | Giảm thời gian flush token từ 100ms xuống 80ms để tăng độ mượt mà khi hiển thị kết quả. |
+| 2026-06 | **Tăng cường RAG (topK: 5, batch: 16)** | Tăng số lượng ngữ cảnh và tốc độ xử lý embedding để cân bằng giữa độ chính xác và hiệu năng. |
+| 2026-06 | **Siết chặt System Prompt Grounding** | Ép mô hình sử dụng ngữ cảnh RAG và từ chối trả lời nếu không có thông tin để giảm ảo tưởng. |
 
 ## ADR-2026-06-05 — Explicit Model Lifecycle and Staged Generation Pipeline
 

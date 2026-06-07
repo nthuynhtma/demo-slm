@@ -22,7 +22,9 @@ class ContextBuilder {
     if (results.isEmpty) return '';
 
     final buf = StringBuffer();
-    buf.writeln('### Relevant context:');
+    buf.writeln('Context information is below.');
+    buf.writeln('---------------------');
+    
     int total = 0;
 
     for (final result in results) {
@@ -31,14 +33,16 @@ class ContextBuilder {
       // Check if adding this snippet would exceed the limit
       if (total + snippet.length > maxContextChars) break;
 
-      buf.writeln('---');
       buf.writeln('[Source: ${result.document.title}]');
       buf.writeln(snippet);
+      buf.writeln('---');
       total += snippet.length;
     }
 
-    buf.writeln('---');
-    buf.writeln('### Question: $userQuery');
+    buf.writeln('---------------------');
+    buf.writeln('Given the context information and not prior knowledge, answer the question.');
+    buf.writeln('Question: $userQuery');
+    buf.writeln('Answer:');
 
     return buf.toString();
   }

@@ -50,8 +50,25 @@ Send Message
 
 ```text
 App Background
--> Release model resources if required
+- Release model resources if required
 ```
+
+## Performance & Accuracy Standards
+
+### 1. Token Budgeting & Estimation
+- Use word-based estimation (1.3 tokens/word) for reliability across languages.
+- Maintain a minimum of 1024 tokens for response headroom.
+- Cap RAG context at 2000 tokens unless specified otherwise.
+
+### 2. UI Responsiveness
+- Stream tokens from native to Dart.
+- Batch UI updates at 80ms intervals to balance smoothness and CPU usage.
+- Use `jumpTo` for auto-scrolling during streaming to avoid conflict with `SelectableText`.
+
+### 3. RAG Quality
+- Retrieval uses topK=5 for better coverage.
+- Embedding batch size is 16 for efficient indexing.
+- System prompt enforces grounding: "If the answer is not in the context, state that you don't know."
 
 ## Architecture Decisions
 

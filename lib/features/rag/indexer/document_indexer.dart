@@ -64,12 +64,12 @@ class DocumentIndexer {
       return;
     }
 
-    // Step 2: Embed in batches of 10
+    // Step 2: Embed in batches of 16
     final chunks = <Chunk>[];
     final totalChunks = chunkResults.length;
 
-    for (int i = 0; i < totalChunks; i += 10) {
-      final batch = chunkResults.skip(i).take(10).toList();
+    for (int i = 0; i < totalChunks; i += 16) {
+      final batch = chunkResults.skip(i).take(16).toList();
 
       // Embed batch
       final embeddings =

@@ -1,14 +1,11 @@
 PODS:
   - Flutter (1.0.0)
-  - flutter_secure_storage (6.0.0):
-    - Flutter
   - MediaPipeTasksGenAI (0.10.35):
     - MediaPipeTasksGenAIC (= 0.10.35)
   - MediaPipeTasksGenAIC (0.10.35)
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
-  - flutter_secure_storage (from `.symlinks/plugins/flutter_secure_storage/ios`)
   - MediaPipeTasksGenAI (= 0.10.35)
   - MediaPipeTasksGenAIC (= 0.10.35)
 
@@ -20,12 +17,9 @@ SPEC REPOS:
 EXTERNAL SOURCES:
   Flutter:
     :path: Flutter
-  flutter_secure_storage:
-    :path: ".symlinks/plugins/flutter_secure_storage/ios"
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  flutter_secure_storage: 1ed9476fba7e7a782b22888f956cce43e2c62f13
   MediaPipeTasksGenAI: e311d919ab79b2e615e381b65ad271b2c2617312
   MediaPipeTasksGenAIC: fee4ffd93e57fd2022287bcce0340b3c68b537be
 

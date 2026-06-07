@@ -42,7 +42,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   bool _lastLogWritten = false;
   static const String _systemPrompt =
       'You are a helpful offline AI assistant running on-device. '
-      'Answer clearly and use the provided context and conversation history when relevant.';
+      'Answer clearly and concisely. Use the provided context and conversation history to ground your response. '
+      'If the answer is not in the context, state that you don\'t know based on the provided information.';
 
   ChatBloc({
     required InferenceService inferenceService,
@@ -161,7 +162,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
       // Step 2: Retrieve context from RAG if enabled
       final List<SearchResult> results = state.useRag && _ragRetriever != null
-          ? await _ragRetriever.retrieve(queryText, topK: 3)
+          ? await _ragRetriever.retrieve(queryText, topK: 5)
           : [];
 
       final retrievedContextText = results.isNotEmpty && _contextBuilder != null
@@ -301,7 +302,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   void _onStreamToken(StreamToken event, Emitter<ChatState> emit) {
     _tokenBuffer.write(event.token);
 
-    _flushTimer ??= Timer.periodic(const Duration(milliseconds: 100), (timer) {
+    _flushTimer ??= Timer.periodic(const Duration(milliseconds: 80), (timer) {
       // Use add() to dispatch through the Bloc event loop so that
       // emit() is always called with a valid Emitter context.
       // The Bloc event loop handles isClosed checks internally.

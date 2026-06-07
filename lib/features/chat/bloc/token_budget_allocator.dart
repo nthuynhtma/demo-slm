@@ -21,9 +21,21 @@ class TokenBudgetAllocator {
   });
 
   /// Estimates tokens in a text string.
-  /// 1 token ≈ 3.5 characters (safe estimate for English and general code).
+  /// Uses a word-based heuristic (1 word ≈ 1.3 tokens) which is more accurate
+  /// for mixed English/Vietnamese/Code content than simple character count.
   int estimateTokens(String text) {
-    return (text.length / 3.5).ceil();
+    if (text.isEmpty) return 0;
+    
+    // Split by whitespace to count words
+    final words = text.trim().split(RegExp(r'\s+')).length;
+    final wordBased = (words * 1.3).ceil();
+    
+    // Fallback/Safety check: ensures we don't underestimate extremely long 
+    // strings without spaces (like long URLs or code).
+    final charBased = (text.length / 3.5).ceil();
+    
+    // Return the larger of the two estimates for safety
+    return wordBased > charBased ? wordBased : charBased;
   }
 
   /// Allocates budget and returns a list of history messages that fit within the remaining history budget.

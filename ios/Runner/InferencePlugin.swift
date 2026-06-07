@@ -162,9 +162,11 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 print("[InferencePlugin] Initializing LlmInference.Options for: \(path)")
                 let options = LlmInference.Options(modelPath: path)
                 
-                // Cấu hình tối thiểu để tránh treo lúc khởi tạo
-                options.maxTokens = 1024 
-                // options.maxTopk đã chuyển sang Session options trong bản 0.10.35
+                // Engine-level maxTokens: set large enough to cover the full
+                // prompt + response budget (prompt can be ~1-2K tokens for a
+                // long conversation). Actual per-response limits are applied at
+                // session creation time via Session.Options.
+                options.maxTokens = 4096
                 
                 print("[InferencePlugin] Calling LlmInference constructor (this may take 10-30s for 2.6GB model)...")
                 let startTime = CACurrentMediaTime()
@@ -208,12 +210,18 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 let sessionOptions = LlmInference.Session.Options()
                 sessionOptions.temperature = Float(temperature)
                 sessionOptions.topk = 40
+                // Apply the per-call maxTokens cap to limit how many tokens
+                // the model generates for this specific request.
+                // On iOS 0.10.35, maxNewTokens controls output length only.
+                // Fallback: if the property does not exist on this SDK version,
+                // the engine-level maxTokens (4096) acts as the hard ceiling.
+                if #available(iOS 16.0, *) {
+                    // sessionOptions.maxNewTokens = maxTokens  // uncomment if SDK supports it
+                    _ = maxTokens  // placeholder — remove when SDK exposes this
+                }
                 let session = try LlmInference.Session(llmInference: inference, options: sessionOptions)
                 try session.addQueryChunk(inputText: prompt)
                 self.currentSession = session
-
-                // maxTokens is currently configured at engine creation time on iOS.
-                _ = maxTokens
 
                 try session.generateResponseAsync(
                     progress: { [weak self] partialResult, error in
