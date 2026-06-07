@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/channels/inference_service.dart';
 import '../../model_manager/loader/model_loader.dart';
@@ -399,6 +400,39 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     ));
   }
 
+  Future<bool> _ensureNotificationPermission(Emitter<ChatState> emit) async {
+    final status = await Permission.notification.status;
+    if (status.isGranted) return true;
+
+    final result = await Permission.notification.request();
+    if (result.isGranted) return true;
+
+    if (result.isPermanentlyDenied) {
+      emit(_withFeedback(
+        state.copyWith(
+          isDownloading: false,
+          isDownloadPaused: false,
+          errorMessage: 'Ứng dụng cần quyền thông báo để hiển thị tiến trình download.',
+          status: ChatStatus.error,
+        ),
+        'Notification permission đã bị chặn. Vui lòng bật trong Cài đặt.',
+        isError: true,
+      ));
+    } else {
+      emit(_withFeedback(
+        state.copyWith(
+          isDownloading: false,
+          isDownloadPaused: false,
+          errorMessage: 'Ứng dụng cần quyền thông báo để hiển thị tiến trình download.',
+          status: ChatStatus.error,
+        ),
+        'Quyền thông báo bị từ chối. Không thể hiển thị tiến trình download ngoài notification.',
+        isError: true,
+      ));
+    }
+    return false;
+  }
+
   Future<void> _onDownloadModel(
     DownloadModel event,
     Emitter<ChatState> emit,
@@ -416,6 +450,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     ));
 
     try {
+      final granted = await _ensureNotificationPermission(emit);
+      if (!granted) return;
+
       await _modelLoader.downloadModel();
     } catch (e) {
       _logAction('Download start failed: $e');

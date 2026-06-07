@@ -239,7 +239,7 @@ Key milestones:
 - ✅ Startup flow (parallel checks, auto-preload)
 - ✅ Generation pipeline (ensure-loaded → retrieve → budget → generate → batch → finalize)
 - ✅ Streaming batching (100ms flush)
-- ✅ Token budgeting (4K context window synchronized with Native)
+- ✅ Token budgeting (8K context window)
 - ✅ Background downloader (pause/resume/cancel)
 - ✅ RAG persistence (durable vector store)
 - ✅ iOS platform (SPM deployment target fix)

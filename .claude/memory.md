@@ -13,7 +13,6 @@
 | 2026-06 | **Băm SHA256 dạng stream để tránh OOM** | Tránh lỗi tràn bộ nhớ (OOM) khi băm file model nặng 2.6GB trên thiết bị di động |
 | 2026-06 | **Resumable download qua Dio Range** | Hỗ trợ tải tiếp tục model 2.6GB bằng HTTP Range header để tăng độ ổn định |
 | 2026-06 | **Background downloader thay vì Dio** | `background_downloader` cho phép download sống sót qua app suspend/terminate, native notification support Android/iOS, built-in pause/resume/cancel |
-| 2026-06 | **Giới hạn context window xuống 4096 tokens** | Khắc phục lỗi `AllocateTensors` và đảm bảo ổn định bộ nhớ trên thiết bị di động. |
 | 2026-06 | **Hệ thống UI Feedback & Centralized Logging** | Cung cấp thông báo SnackBar và log console thống nhất cho mọi hành động của người dùng. |
 
 ## ADR-2026-06-05 — Explicit Model Lifecycle and Staged Generation Pipeline
@@ -470,49 +469,6 @@ App Background
 - `pod install` → 4 pods installed (Flutter, MediaPipeTasksGenAI 0.10.35, MediaPipeTasksGenAIC 0.10.35, flutter_secure_storage 6.0.0)
 - `flutter analyze` → 13 pre-existing issues, **0 errors**
 - Tất cả Pods deployment target đồng bộ về 16.0
-
----
-
-## Implementation Sync Notes (2026-06-07) — Stability & Feedback
-
-### 🟢 Fix #1: Lỗi `AllocateTensors` & Đồng bộ Context Window
-- **Nguyên nhân:** Native engine (Android/iOS) giới hạn `maxTokens = 1024` trong khi `TokenBudgetAllocator` (Flutter) sử dụng 8192. Khi prompt vượt quá 1024 tokens, engine crash ngầm hoặc trả về lỗi INTERNAL.
-- **Giải pháp:**
-  - Đồng bộ `maxTokens = 4096` ở cả 3 nơi: `InferencePlugin.kt` (Android), `InferencePlugin.swift` (iOS) và `TokenBudgetAllocator` (Flutter).
-  - Giảm `totalContextWindow` xuống 4096 để đảm bảo ổn định RAM trên thiết bị di động (thường 4-6GB RAM).
-  - Cập nhật `CLAUDE.md` và `inference.md` phản ánh giới hạn mới.
-
-### 🔵 Feature #1: Hệ thống UI Feedback & Centralized Logging
-- **Mục tiêu:** Giúp người dùng biết ứng dụng đang làm gì và lập trình viên dễ dàng debug qua console.
-- **Triển khai:**
-  - `ChatState`: Thêm `feedbackMessage`, `feedbackIsError`, `feedbackVersion`.
-  - `ChatBloc`: Thêm `_logAction(msg)` và `_withFeedback(state, msg)` để tập trung hóa việc ghi log và thông báo.
-  - `ChatScreen`: Hiển thị `SnackBar` mỗi khi có feedback mới.
-  - **Blocking Overlay:** Hiển thị lớp phủ làm mờ và loading indicator khi `ChatStatus.loadingModel` để ngăn người dùng thao tác trong lúc nạp RAM.
-
-### 🟡 Dọn dẹp mã nguồn (Cleanup)
-- Xóa các toán tử `!` (non-null assertion) dư thừa gây cảnh báo linter.
-- Xóa phương thức `_buildRagPrompt` không sử dụng.
-- Dùng toán tử `??=` cho `Timer` để code ngắn gọn hơn.
-
-### Architecture Decisions Confirmed
-
-| Component | Decision | Reason |
-|-----------|----------|--------|
-| UI Feedback | State-driven SnackBar | UX tốt hơn, người dùng biết được kết quả hành động |
-| Native Sync | Max tokens = 4096 | Cân bằng giữa RAM và khả năng xử lý ngữ cảnh |
-| Logging | Centralized `_logAction` | Dễ dàng quản lý và debug tập trung trong Bloc |
-
-### Files Changed (2026-06-07)
-
-| File | Action | Summary |
-|------|--------|---------|
-| `lib/features/chat/bloc/chat_state.dart` | Modified | Thêm các trường feedback |
-| `lib/features/chat/bloc/chat_bloc.dart` | Modified | Centralized logging, feedback flow, cleanup linter |
-| `lib/features/chat/screens/chat_screen.dart` | Modified | Hiển thị SnackBar, Blocking Overlay |
-| `lib/features/chat/bloc/token_budget_allocator.dart` | Modified | Giảm context window xuống 4096 |
-| `android/.../InferencePlugin.kt` | Modified | Tăng `maxTokens` lên 4096 |
-| `ios/.../InferencePlugin.swift` | Modified | Tăng `maxTokens` lên 4096 |
 
 ---
 
