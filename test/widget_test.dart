@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'package:slm_app/core/channels/mock_inference_service.dart';
+import 'package:slm_app/core/logger/chat_logger.dart';
 import 'package:slm_app/features/chat/bloc/chat_bloc.dart';
 import 'package:slm_app/features/chat/screens/chat_screen.dart';
 import 'package:slm_app/features/model_manager/loader/model_loader.dart';
@@ -55,11 +56,14 @@ void main() {
       (WidgetTester tester) async {
     final mockService = MockInferenceService();
     final fakeLoader = FakeModelLoader();
+    final chatLogger = NullChatLogger();
+
     await tester.pumpWidget(
       BlocProvider(
         create: (_) => ChatBloc(
           inferenceService: mockService,
           modelLoader: fakeLoader,
+          chatLogger: chatLogger,
         ),
         child: const MaterialApp(home: ChatScreen()),
       ),

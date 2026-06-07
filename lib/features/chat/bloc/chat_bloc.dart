@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/channels/inference_service.dart';
+import '../../../core/logger/chat_logger.dart';
 import '../../model_manager/loader/model_loader.dart';
 import '../../model_manager/download/model_downloader.dart';
 import '../../rag/indexer/document_indexer.dart';
@@ -27,11 +28,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   final RagRetriever? _ragRetriever;
   final ContextBuilder? _contextBuilder;
   final Uuid _uuid = const Uuid();
+  final IChatLogger _logger;
   StreamSubscription<String>? _inferenceSubscription;
   StreamSubscription<ModelDownloadUpdate>? _downloadSubscription;
   final StringBuffer _tokenBuffer = StringBuffer();
   Timer? _flushTimer;
   int _feedbackVersion = 0;
+
+  // Track the last user query for logging
+  String _lastUserQuery = '';
+  String _lastAssistantMessageId = '';
+  bool _lastUsedRag = false;
+  bool _lastLogWritten = false;
   static const String _systemPrompt =
       'You are a helpful offline AI assistant running on-device. '
       'Answer clearly and use the provided context and conversation history when relevant.';
@@ -39,11 +47,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   ChatBloc({
     required InferenceService inferenceService,
     required ModelLoader modelLoader,
+    required IChatLogger chatLogger,
     DocumentIndexer? documentIndexer,
     RagRetriever? ragRetriever,
     ContextBuilder? contextBuilder,
   }) : _inferenceService = inferenceService,
        _modelLoader = modelLoader,
+       _logger = chatLogger,
        _documentIndexer = documentIndexer,
        _ragRetriever = ragRetriever,
        _contextBuilder = contextBuilder,
@@ -96,6 +106,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     final queryText = event.message.trim();
     if (queryText.isEmpty) return;
 
+    // Track the user query for logging
+    _lastUserQuery = queryText;
+    _lastUsedRag = state.useRag;
+    _lastLogWritten = false;
+
     // Add user message
     final userMessage = ChatMessage(
       id: _uuid.v4(),
@@ -112,6 +127,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       timestamp: DateTime.now(),
       isStreaming: true,
     );
+    _lastAssistantMessageId = assistantMessage.id;
     final pendingMessages = [...state.messages, userMessage, assistantMessage];
 
     emit(
@@ -330,15 +346,19 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     final lastMessage = messages.last;
     if (!lastMessage.isStreaming) return;
 
+    final finalText = lastMessage.text + remainingText;
     final updatedMessages = [
       ...messages.sublist(0, messages.length - 1),
       lastMessage.copyWith(
-        text: lastMessage.text + remainingText,
+        text: finalText,
         isStreaming: false,
       ),
     ];
 
     emit(state.copyWith(status: ChatStatus.ready, messages: updatedMessages));
+
+    // Log the completed conversation turn
+    _logConversationTurn(finalText, wasCancelled: false, hadError: false);
   }
 
   Future<void> _onClearChat(ClearChat event, Emitter<ChatState> emit) async {
@@ -372,10 +392,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     // Mark the last streaming message as done (with whatever text it has)
     final messages = state.messages;
+    String? errorText;
     final updatedMessages = messages.map((m) {
       if (m.isStreaming) {
+        errorText = m.text + remainingText;
         return m.copyWith(
-          text: m.text + remainingText,
+          text: errorText,
           isStreaming: false,
         );
       }
@@ -389,6 +411,16 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         errorMessage: event.errorMessage,
       ),
     );
+
+    // Log the errored conversation turn
+    if (_lastUserQuery.isNotEmpty) {
+      _logConversationTurn(
+        errorText ?? '',
+        wasCancelled: false,
+        hadError: true,
+        errorMessage: event.errorMessage,
+      );
+    }
   }
 
   void _onToggleRag(ToggleRag event, Emitter<ChatState> emit) {
@@ -592,14 +624,27 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     _inferenceSubscription = null;
     await _inferenceService.cancelGeneration();
 
+    // Get the finalized assistant text before emitting
+    final finalizedMessages = _finalizeStreamingMessagesWithText(state.messages, remainingText);
+    final lastMsg = finalizedMessages.isNotEmpty ? finalizedMessages.last : null;
+
     emit(_withFeedback(
       state.copyWith(
         status: ChatStatus.ready,
-        messages: _finalizeStreamingMessagesWithText(state.messages, remainingText),
+        messages: finalizedMessages,
         clearError: true,
       ),
       'Generation stopped.',
     ));
+
+    // Log the cancelled conversation turn
+    if (_lastUserQuery.isNotEmpty && lastMsg != null && lastMsg.role == MessageRole.assistant) {
+      _logConversationTurn(
+        lastMsg.text,
+        wasCancelled: true,
+        hadError: false,
+      );
+    }
   }
 
   void _onDownloadProgressUpdate(
@@ -889,5 +934,33 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       ...messages.sublist(0, messages.length - 1),
       lastMessage.copyWith(text: newText, isStreaming: false),
     ];
+  }
+
+  /// Log the completed AI conversation turn to file.
+  Future<void> _logConversationTurn(
+    String aiResponse, {
+    bool wasCancelled = false,
+    bool hadError = false,
+    String? errorMessage,
+  }) async {
+    if (_lastUserQuery.isEmpty) return;
+    if (_lastLogWritten) return; // Prevent duplicate logging
+    _lastLogWritten = true;
+
+    try {
+      await _logger.log(ConversationLogEntry(
+        id: _lastAssistantMessageId.isNotEmpty ? _lastAssistantMessageId : _uuid.v4(),
+        timestamp: DateTime.now(),
+        userQuery: _lastUserQuery,
+        aiResponse: aiResponse,
+        wasCancelled: wasCancelled,
+        hadError: hadError,
+        errorMessage: errorMessage,
+        usedRag: _lastUsedRag,
+      ));
+    } catch (e) {
+      // ignore: avoid_print
+      print('[ChatBloc] Failed to log conversation: $e');
+    }
   }
 }

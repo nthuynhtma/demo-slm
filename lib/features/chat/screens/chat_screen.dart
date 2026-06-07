@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../bloc/chat_bloc.dart';
@@ -19,6 +21,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _lastFeedbackVersion = 0;
 
+  // Debounce timer để tránh gọi scroll liên tục khi đang streaming
+  Timer? _scrollDebounceTimer;
+
   @override
   void initState() {
     super.initState();
@@ -29,6 +34,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _inputController.dispose();
+    _scrollDebounceTimer?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
@@ -43,14 +49,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        );
-      }
+    // Debounce: chỉ gọi scroll sau 100ms yên tĩnh để tránh conflict với SelectableText selection
+    _scrollDebounceTimer?.cancel();
+    _scrollDebounceTimer = Timer(const Duration(milliseconds: 100), () {
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!_scrollController.hasClients) return;
+
+        try {
+          // Kiểm tra kỹ trước khi scroll
+          final position = _scrollController.position;
+          if (position.hasContentDimensions &&
+              position.maxScrollExtent.isFinite &&
+              position.maxScrollExtent > 0) {
+            // Sử dụng jumpTo thay vì animateTo để tránh conflict
+            // với ScrollNotificationObserverState trong quá trình streaming
+            _scrollController.jumpTo(position.maxScrollExtent);
+          }
+        } catch (_) {
+          // Bỏ qua lỗi ScrollNotificationObserverState nếu có
+          // Đây là bug đã biết của Flutter khi SelectableText + scroll đồng thời
+        }
+      });
     });
   }
 
@@ -275,6 +296,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 child: BlocConsumer<ChatBloc, ChatState>(
                   listener: (context, state) {
                     if (state.status == ChatStatus.generating) {
+                      // Chỉ scroll khi text thay đổi (phiên bản đầu tiên của tin nhắn mới)
+                      // Tránh scroll quá nhiều gây conflict với SelectableText
                       _scrollToBottom();
                     }
                     if (state.feedbackVersion != _lastFeedbackVersion &&

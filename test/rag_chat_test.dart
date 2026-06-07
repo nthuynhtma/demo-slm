@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:slm_app/core/channels/inference_service.dart';
 import 'package:slm_app/core/channels/mock_inference_service.dart';
 import 'package:slm_app/core/channels/mock_embedding_service.dart';
+import 'package:slm_app/core/logger/chat_logger.dart';
 import 'package:slm_app/features/chat/bloc/chat_bloc.dart';
 import 'package:slm_app/features/chat/bloc/chat_event.dart';
 import 'package:slm_app/features/chat/bloc/chat_state.dart';
@@ -18,8 +19,11 @@ class FakeModelLoader implements ModelLoader {
   bool _isLoaded = false;
   int ensureLoadCalls = 0;
 
-  /// Reset the call counter (use after waiting for startup to complete).
-  void resetLoadCounter() => ensureLoadCalls = 0;
+  /// Reset the call counter and unload state (use after waiting for startup to complete).
+  void resetLoadCounter() {
+    ensureLoadCalls = 0;
+    _isLoaded = false;
+  }
 
   @override
   bool get isLoaded => _isLoaded;
@@ -140,6 +144,7 @@ void main() {
     late DocumentIndexer documentIndexer;
     late RagRetriever ragRetriever;
     late ContextBuilder contextBuilder;
+    late IChatLogger chatLogger;
     late ChatBloc chatBloc;
 
     setUp(() {
@@ -158,9 +163,11 @@ void main() {
         store: vectorStore,
       );
       contextBuilder = const ContextBuilder();
+      chatLogger = NullChatLogger();
       chatBloc = ChatBloc(
         inferenceService: mockInferenceService,
         modelLoader: fakeModelLoader,
+        chatLogger: chatLogger,
         documentIndexer: documentIndexer,
         ragRetriever: ragRetriever,
         contextBuilder: contextBuilder,
@@ -238,6 +245,7 @@ void main() {
         final cancelBloc = ChatBloc(
           inferenceService: controlledInferenceService,
           modelLoader: fakeModelLoader,
+          chatLogger: chatLogger,
           documentIndexer: documentIndexer,
           ragRetriever: ragRetriever,
           contextBuilder: contextBuilder,

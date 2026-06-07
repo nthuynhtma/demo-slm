@@ -6,6 +6,7 @@ import 'core/channels/inference_service.dart';
 import 'core/channels/inference_channel.dart';
 import 'core/channels/mock_embedding_service.dart';
 import 'core/channels/mock_inference_service.dart';
+import 'core/logger/chat_logger.dart';
 import 'features/chat/bloc/chat_bloc.dart';
 import 'features/chat/screens/chat_screen.dart';
 import 'features/model_manager/download/model_downloader.dart';
@@ -21,6 +22,9 @@ void main() async {
   // Use --dart-define=USE_MOCK=true to run with mock services
   // Use --dart-define=USE_MOCK=false (or omit) for real device with LiteRT-LM
   const bool useMock = bool.fromEnvironment('USE_MOCK', defaultValue: false);
+
+  // ── Chat Logger (AI response logging to file) ──
+  final chatLogger = await ChatLogger.create();
 
   // ── Inference ──
   final InferenceService inferenceService = useMock
@@ -60,6 +64,7 @@ void main() async {
     SlmApp(
       inferenceService: inferenceService,
       modelLoader: modelLoader,
+      chatLogger: chatLogger,
       documentIndexer: documentIndexer,
       ragRetriever: ragRetriever,
       contextBuilder: contextBuilder,
@@ -71,6 +76,7 @@ void main() async {
 class SlmApp extends StatelessWidget {
   final InferenceService inferenceService;
   final ModelLoader modelLoader;
+  final ChatLogger chatLogger;
   final DocumentIndexer documentIndexer;
   final RagRetriever ragRetriever;
   final ContextBuilder contextBuilder;
@@ -79,6 +85,7 @@ class SlmApp extends StatelessWidget {
     super.key,
     required this.inferenceService,
     required this.modelLoader,
+    required this.chatLogger,
     required this.documentIndexer,
     required this.ragRetriever,
     required this.contextBuilder,
@@ -90,6 +97,7 @@ class SlmApp extends StatelessWidget {
       create: (_) => ChatBloc(
         inferenceService: inferenceService,
         modelLoader: modelLoader,
+        chatLogger: chatLogger,
         documentIndexer: documentIndexer,
         ragRetriever: ragRetriever,
         contextBuilder: contextBuilder,
