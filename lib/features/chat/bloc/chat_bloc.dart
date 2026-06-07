@@ -30,9 +30,10 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   StreamSubscription<ModelDownloadUpdate>? _downloadSubscription;
   final StringBuffer _tokenBuffer = StringBuffer();
   Timer? _flushTimer;
+  int _feedbackVersion = 0;
   static const String _systemPrompt =
       'You are a helpful offline AI assistant running on-device. '
-      'Answer clearly and use the provided conversation history when relevant.';
+      'Answer clearly and use the provided context and conversation history when relevant.';
 
   ChatBloc({
     required InferenceService inferenceService,
@@ -143,11 +144,11 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
       // Step 2: Retrieve context from RAG if enabled
       final List<SearchResult> results = state.useRag && _ragRetriever != null
-          ? await _ragRetriever!.retrieve(queryText, topK: 3)
+          ? await _ragRetriever.retrieve(queryText, topK: 3)
           : [];
 
       final retrievedContextText = results.isNotEmpty && _contextBuilder != null
-          ? _contextBuilder!.build(results, queryText)
+          ? _contextBuilder.build(results, queryText)
           : null;
 
       // Step 3: Allocate token budgets
@@ -204,19 +205,24 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     PreloadModel event,
     Emitter<ChatState> emit,
   ) async {
-    // Only block if we are currently generating a response.
-    // We allow PreloadModel to proceed even if status is already loadingModel
-    // to ensure the underlying loading logic actually runs.
     if (state.status == ChatStatus.generating) {
       return;
     }
 
     if (_modelLoader.isLoaded) {
-      emit(state.copyWith(status: ChatStatus.ready, isModelLoaded: true));
+      _logAction('Model already loaded.');
+      emit(_withFeedback(
+        state.copyWith(status: ChatStatus.ready, isModelLoaded: true),
+        'Model is already loaded.',
+      ));
       return;
     }
 
-    emit(state.copyWith(status: ChatStatus.loadingModel, clearError: true));
+    _logAction('Loading model into memory...');
+    emit(_withFeedback(
+      state.copyWith(status: ChatStatus.loadingModel, clearError: true),
+      'Loading model into memory...',
+    ));
 
     try {
       // ignore: avoid_print
@@ -232,26 +238,27 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       
       final isDownloaded = await _modelLoader.isModelDownloaded();
       
-      // ignore: avoid_print
-      print('[ChatBloc] Model preload successful');
-      emit(
+      _logAction('Model preload successful.');
+      emit(_withFeedback(
         state.copyWith(
           status: ChatStatus.ready,
           isModelDownloaded: isDownloaded,
           isModelLoaded: true,
           clearError: true,
         ),
-      );
+        'Model loaded and ready for chat.',
+      ));
     } catch (e) {
-      // ignore: avoid_print
-      print('[ChatBloc] Model preload failed: $e');
-      emit(
+      _logAction('Model preload failed: $e');
+      emit(_withFeedback(
         state.copyWith(
           status: ChatStatus.error,
           errorMessage: 'Failed to load model into memory: $e',
           isModelLoaded: false,
         ),
-      );
+        'Failed to load model into memory.',
+        isError: true,
+      ));
     }
   }
 
@@ -274,32 +281,15 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     return buf.toString();
   }
 
-  /// Retrieve context chunks and build an augmented prompt.
-  Future<String> _buildRagPrompt(String userMessage) async {
-    final retriever = _ragRetriever;
-    final builder = _contextBuilder;
-    if (retriever == null || builder == null) return userMessage;
-
-    try {
-      final results = await retriever.retrieve(userMessage, topK: 3);
-      if (results.isEmpty) return userMessage;
-      return builder.build(results, userMessage);
-    } catch (_) {
-      return userMessage; // Fallback to original query on failure
-    }
-  }
-
   void _onStreamToken(StreamToken event, Emitter<ChatState> emit) {
     _tokenBuffer.write(event.token);
 
-    if (_flushTimer == null) {
-      _flushTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-        // Use add() to dispatch through the Bloc event loop so that
-        // emit() is always called with a valid Emitter context.
-        // The Bloc event loop handles isClosed checks internally.
-        add(const FlushTokens());
-      });
-    }
+    _flushTimer ??= Timer.periodic(const Duration(milliseconds: 100), (timer) {
+      // Use add() to dispatch through the Bloc event loop so that
+      // emit() is always called with a valid Emitter context.
+      // The Bloc event loop handles isClosed checks internally.
+      add(const FlushTokens());
+    });
   }
 
   void _onFlushTokens(FlushTokens event, Emitter<ChatState> emit) {
@@ -358,13 +348,15 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _inferenceSubscription?.cancel();
     _inferenceSubscription = null;
     await _inferenceService.resetSession();
-    emit(
+    _logAction('Chat history cleared.');
+    emit(_withFeedback(
       state.copyWith(
         status: ChatStatus.ready,
         messages: const [],
         clearError: true,
       ),
-    );
+      'Chat history cleared.',
+    ));
   }
 
   void _onChatError(ChatError event, Emitter<ChatState> emit) {
@@ -399,7 +391,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   }
 
   void _onToggleRag(ToggleRag event, Emitter<ChatState> emit) {
-    emit(state.copyWith(useRag: !state.useRag));
+    final nextUseRag = !state.useRag;
+    _logAction('RAG toggled ${nextUseRag ? 'on' : 'off'}.');
+    emit(_withFeedback(
+      state.copyWith(useRag: nextUseRag),
+      nextUseRag ? 'RAG enabled.' : 'RAG disabled.',
+    ));
   }
 
   Future<void> _onDownloadModel(
@@ -407,26 +404,31 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     Emitter<ChatState> emit,
   ) async {
     if (state.isDownloading && !state.isDownloadPaused) return;
-    emit(
+    _logAction('Starting model download.');
+    emit(_withFeedback(
       state.copyWith(
         isDownloading: true,
         isDownloadPaused: false,
         downloadProgress: 0.0,
         clearError: true,
       ),
-    );
+      'Starting model download...',
+    ));
 
     try {
       await _modelLoader.downloadModel();
     } catch (e) {
-      emit(
+      _logAction('Download start failed: $e');
+      emit(_withFeedback(
         state.copyWith(
           isDownloading: false,
           isDownloadPaused: false,
           errorMessage: e.toString(),
           status: ChatStatus.error,
         ),
-      );
+        'Failed to start model download.',
+        isError: true,
+      ));
     }
   }
 
@@ -460,34 +462,33 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         ));
         break;
       case ModelDownloadStatus.complete:
-        // ignore: avoid_print
-        print('[ChatBloc] Download complete. Triggering preload...');
-        emit(state.copyWith(
+        _logAction('Download complete. Triggering preload.');
+        emit(_withFeedback(state.copyWith(
           isDownloading: false,
           isDownloadPaused: false,
           downloadProgress: 1.0,
           isModelDownloaded: true,
           status: ChatStatus.loadingModel,
-        ));
+        ), 'Model download completed. Loading into memory...'));
         add(const PreloadModel());
         break;
       case ModelDownloadStatus.failed:
-        // ignore: avoid_print
-        print('[ChatBloc] Download failed: ${event.errorMessage}');
-        emit(state.copyWith(
+        _logAction('Download failed: ${event.errorMessage}');
+        emit(_withFeedback(state.copyWith(
           isDownloading: false,
           isDownloadPaused: false,
           status: ChatStatus.error,
           errorMessage: event.errorMessage ?? 'Download failed',
-        ));
+        ), 'Model download failed.', isError: true));
         break;
       case ModelDownloadStatus.canceled:
-        emit(state.copyWith(
+        _logAction('Download canceled.');
+        emit(_withFeedback(state.copyWith(
           isDownloading: false,
           isDownloadPaused: false,
           downloadProgress: 0.0,
           status: ChatStatus.needsDownload,
-        ));
+        ), 'Model download canceled.'));
         break;
       default:
         break;
@@ -499,9 +500,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     Emitter<ChatState> emit,
   ) async {
     try {
+      _logAction('Pausing model download.');
       await _modelLoader.pauseDownload();
+      emit(_withFeedback(state, 'Pausing model download...'));
     } catch (e) {
-      emit(state.copyWith(errorMessage: e.toString()));
+      _logAction('Pause download failed: $e');
+      emit(_withFeedback(state.copyWith(errorMessage: e.toString()), 'Failed to pause model download.', isError: true));
     }
   }
 
@@ -510,9 +514,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     Emitter<ChatState> emit,
   ) async {
     try {
+      _logAction('Resuming model download.');
       await _modelLoader.resumeDownload();
+      emit(_withFeedback(state, 'Resuming model download...'));
     } catch (e) {
-      emit(state.copyWith(errorMessage: e.toString()));
+      _logAction('Resume download failed: $e');
+      emit(_withFeedback(state.copyWith(errorMessage: e.toString()), 'Failed to resume model download.', isError: true));
     }
   }
 
@@ -521,9 +528,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     Emitter<ChatState> emit,
   ) async {
     try {
+      _logAction('Canceling model download.');
       await _modelLoader.cancelDownload();
+      emit(_withFeedback(state, 'Canceling model download...'));
     } catch (e) {
-      emit(state.copyWith(errorMessage: e.toString()));
+      _logAction('Cancel download failed: $e');
+      emit(_withFeedback(state.copyWith(errorMessage: e.toString()), 'Failed to cancel model download.', isError: true));
     }
   }
 
@@ -533,6 +543,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     Emitter<ChatState> emit,
   ) async {
     if (state.status != ChatStatus.generating) return;
+    _logAction('Stopping response generation.');
 
     _flushTimer?.cancel();
     _flushTimer = null;
@@ -544,13 +555,14 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     _inferenceSubscription = null;
     await _inferenceService.cancelGeneration();
 
-    emit(
+    emit(_withFeedback(
       state.copyWith(
         status: ChatStatus.ready,
         messages: _finalizeStreamingMessagesWithText(state.messages, remainingText),
         clearError: true,
       ),
-    );
+      'Generation stopped.',
+    ));
   }
 
   void _onDownloadProgressUpdate(
@@ -566,18 +578,23 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
   ) async {
     try {
       await _modelLoader.deleteModel();
-      emit(
+      _logAction('Local model file deleted.');
+      emit(_withFeedback(
         state.copyWith(
           isModelDownloaded: false,
           isModelLoaded: false,
           downloadProgress: 0.0,
           status: ChatStatus.needsDownload,
         ),
-      );
+        'Local model file deleted.',
+      ));
     } catch (e) {
-      emit(
+      _logAction('Delete model failed: $e');
+      emit(_withFeedback(
         state.copyWith(errorMessage: e.toString(), status: ChatStatus.error),
-      );
+        'Failed to delete local model file.',
+        isError: true,
+      ));
     }
   }
 
@@ -588,7 +605,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     final isDownloaded = await _modelLoader.isModelDownloaded();
     final isLoaded = _modelLoader.isLoaded;
     final docCount = _documentIndexer != null
-        ? await _documentIndexer!.documentCount
+        ? await _documentIndexer.documentCount
         : 0;
 
     emit(
@@ -607,28 +624,39 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     final indexer = _documentIndexer;
     if (indexer == null) return;
 
-    emit(state.copyWith(indexingProgress: 0.0, clearError: true));
+    _logAction('Indexing document: ${event.title}');
+    emit(_withFeedback(
+      state.copyWith(indexingProgress: 0.0, clearError: true),
+      'Indexing "${event.title}"...',
+    ));
 
     try {
       await for (final progress in indexer.indexText(
         event.content,
         title: event.title,
       )) {
+        if (isClosed) return;
         emit(state.copyWith(indexingProgress: progress.fraction));
       }
 
+      if (isClosed) return;
       final docCount = await indexer.documentCount;
-      emit(
+      _logAction('Document indexed successfully: ${event.title}');
+      emit(_withFeedback(
         state.copyWith(documentCount: docCount, clearIndexingProgress: true),
-      );
+        'Document indexed successfully.',
+      ));
     } catch (e) {
-      emit(
+      _logAction('Index document failed: $e');
+      emit(_withFeedback(
         state.copyWith(
           clearIndexingProgress: true,
           errorMessage: e.toString(),
           status: ChatStatus.error,
         ),
-      );
+        'Failed to index document.',
+        isError: true,
+      ));
     }
   }
 
@@ -638,11 +666,15 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     try {
       await indexer.clearIndex();
-      emit(state.copyWith(documentCount: 0));
+      _logAction('Knowledge base cleared.');
+      emit(_withFeedback(state.copyWith(documentCount: 0), 'Knowledge base cleared.'));
     } catch (e) {
-      emit(
+      _logAction('Clear knowledge base failed: $e');
+      emit(_withFeedback(
         state.copyWith(errorMessage: e.toString(), status: ChatStatus.error),
-      );
+        'Failed to clear knowledge base.',
+        isError: true,
+      ));
     }
   }
 
@@ -655,13 +687,13 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     try {
       // 1. Load VectorStore from disk
       if (_ragRetriever != null) {
-        await _ragRetriever!.store.loadFromDisk();
+        await _ragRetriever.store.loadFromDisk();
       }
 
       // 2. Parallel check of model downloaded and document count
       final results = await Future.wait([
         _modelLoader.isModelDownloaded(),
-        _documentIndexer != null ? _documentIndexer!.documentCount : Future<int>.value(0),
+        _documentIndexer != null ? _documentIndexer.documentCount : Future<int>.value(0),
       ]);
       final isDownloaded = results[0] as bool;
       final docCount = results[1] as int;
@@ -673,7 +705,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
                             activeDownload.status == ModelDownloadStatus.paused;
       final isPaused = activeDownload.status == ModelDownloadStatus.paused;
 
-      emit(
+      emit(_withFeedback(
         state.copyWith(
           isModelDownloaded: isDownloaded,
           documentCount: docCount,
@@ -681,13 +713,18 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           isDownloadPaused: isPaused,
           downloadProgress: activeDownload.progress,
         ),
-      );
+        isDownloading
+            ? (isPaused ? 'Model download is paused.' : 'Model download is in progress.')
+            : (isDownloaded ? 'Downloaded model found on device.' : 'No local model found.'),
+      ));
 
       // 3. Branch based on whether model is downloaded
       if (isDownloaded) {
-        // ignore: avoid_print
-        print('[ChatBloc] Model found on disk at startup. Auto-preloading with 90s timeout...');
-        emit(state.copyWith(status: ChatStatus.loadingModel));
+        _logAction('Model found on disk at startup. Auto-preloading.');
+        emit(_withFeedback(
+          state.copyWith(status: ChatStatus.loadingModel),
+          'Found downloaded model. Loading into memory...',
+        ));
         
         await _modelLoader.ensureModelLoaded().timeout(
           const Duration(seconds: 90),
@@ -696,27 +733,32 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           },
         );
         
-        // ignore: avoid_print
-        print('[ChatBloc] Startup auto-preload successful');
-        emit(
+        _logAction('Startup auto-preload successful.');
+        emit(_withFeedback(
           state.copyWith(
             status: ChatStatus.ready,
             isModelLoaded: true,
             clearError: true,
           ),
-        );
+          'Model loaded automatically and ready.',
+        ));
       } else {
-        // ignore: avoid_print
-        print('[ChatBloc] Model not found on disk at startup.');
-        emit(state.copyWith(status: ChatStatus.needsDownload));
+        _logAction('Model not found on disk at startup.');
+        emit(_withFeedback(
+          state.copyWith(status: ChatStatus.needsDownload),
+          'No local model found. Please download the model first.',
+        ));
       }
     } catch (e) {
-      emit(
+      _logAction('Startup initialization failed: $e');
+      emit(_withFeedback(
         state.copyWith(
           status: ChatStatus.error,
           errorMessage: 'Startup initialization failed: $e',
         ),
-      );
+        'Startup initialization failed.',
+        isError: true,
+      ));
     }
   }
 
@@ -776,6 +818,23 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     await _inferenceSubscription?.cancel();
     await _modelLoader.unloadModel();
     return super.close();
+  }
+
+  void _logAction(String message) {
+    // ignore: avoid_print
+    print('[ChatBloc] $message');
+  }
+
+  ChatState _withFeedback(
+    ChatState current,
+    String message, {
+    bool isError = false,
+  }) {
+    return current.copyWith(
+      feedbackMessage: message,
+      feedbackIsError: isError,
+      feedbackVersion: ++_feedbackVersion,
+    );
   }
 
   List<ChatMessage> _finalizeStreamingMessagesWithText(List<ChatMessage> messages, String remainingText) {

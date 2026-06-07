@@ -35,6 +35,9 @@ class ChatState extends Equatable {
   final int documentCount;
   final double? indexingProgress;
   final bool isDownloadPaused;
+  final String? feedbackMessage;
+  final bool feedbackIsError;
+  final int feedbackVersion;
 
   const ChatState({
     this.status = ChatStatus.checkingStartup,
@@ -48,6 +51,9 @@ class ChatState extends Equatable {
     this.documentCount = 0,
     this.indexingProgress,
     this.isDownloadPaused = false,
+    this.feedbackMessage,
+    this.feedbackIsError = false,
+    this.feedbackVersion = 0,
   });
 
   ChatState copyWith({
@@ -64,6 +70,10 @@ class ChatState extends Equatable {
     double? indexingProgress,
     bool clearIndexingProgress = false,
     bool? isDownloadPaused,
+    String? feedbackMessage,
+    bool clearFeedback = false,
+    bool? feedbackIsError,
+    int? feedbackVersion,
   }) {
     return ChatState(
       status: status ?? this.status,
@@ -77,6 +87,9 @@ class ChatState extends Equatable {
       documentCount: documentCount ?? this.documentCount,
       indexingProgress: clearIndexingProgress ? null : (indexingProgress ?? this.indexingProgress),
       isDownloadPaused: isDownloadPaused ?? this.isDownloadPaused,
+      feedbackMessage: clearFeedback ? null : (feedbackMessage ?? this.feedbackMessage),
+      feedbackIsError: feedbackIsError ?? this.feedbackIsError,
+      feedbackVersion: feedbackVersion ?? this.feedbackVersion,
     );
   }
 
@@ -93,6 +106,9 @@ class ChatState extends Equatable {
         documentCount,
         indexingProgress,
         isDownloadPaused,
+        feedbackMessage,
+        feedbackIsError,
+        feedbackVersion,
       ];
 }
 

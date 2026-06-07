@@ -17,6 +17,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  int _lastFeedbackVersion = 0;
 
   @override
   void initState() {
@@ -150,7 +151,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   statusText = 'No Model';
                   statusColor = Colors.red;
                 }
- 
+
                 return Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
@@ -227,348 +228,389 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       endDrawer: _ConfigDrawer(
         onAddDocument: () => _showAddDocumentDialog(context),
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // Indexing progress banner
+          Column(
+            children: [
+              // Indexing progress banner
+              BlocBuilder<ChatBloc, ChatState>(
+                builder: (context, state) {
+                  if (state.indexingProgress == null) {
+                    return const SizedBox.shrink();
+                  }
+                  return Container(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Indexing document... ${(state.indexingProgress! * 100).toStringAsFixed(0)}%',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onPrimaryContainer,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+
+              // Message list
+              Expanded(
+                child: BlocConsumer<ChatBloc, ChatState>(
+                  listener: (context, state) {
+                    if (state.status == ChatStatus.generating) {
+                      _scrollToBottom();
+                    }
+                    if (state.feedbackVersion != _lastFeedbackVersion &&
+                        state.feedbackMessage != null &&
+                        state.feedbackMessage!.isNotEmpty) {
+                      _lastFeedbackVersion = state.feedbackVersion;
+                      ScaffoldMessenger.of(context)
+                        ..hideCurrentSnackBar()
+                        ..showSnackBar(
+                          SnackBar(
+                            content: Text(state.feedbackMessage!),
+                            backgroundColor: state.feedbackIsError
+                                ? Colors.red
+                                : Colors.black87,
+                          ),
+                        );
+                    }
+                  },
+                  builder: (context, state) {
+                    final isModelMissing = !state.isModelDownloaded && !state.isModelLoaded;
+                    final showDownloadUI = state.status == ChatStatus.needsDownload || state.isDownloading || (state.status == ChatStatus.error && isModelMissing);
+
+                    if (state.status == ChatStatus.checkingStartup) {
+                      return Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Initializing on-device components...',
+                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    if (showDownloadUI) {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24.0),
+                          child: Card(
+                            elevation: 4,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(32.0),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.15),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      state.status == ChatStatus.error 
+                                        ? Icons.error_outline
+                                        : Icons.cloud_download_outlined,
+                                      size: 48,
+                                      color: state.status == ChatStatus.error
+                                        ? Theme.of(context).colorScheme.error
+                                        : Theme.of(context).colorScheme.primary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 24),
+                                  Text(
+                                    state.status == ChatStatus.error
+                                      ? 'Download Failed'
+                                      : 'On-Device AI Model Required',
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                      color: state.status == ChatStatus.error 
+                                        ? Theme.of(context).colorScheme.error
+                                        : null,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    state.status == ChatStatus.error && state.errorMessage != null
+                                      ? state.errorMessage!
+                                      : 'To start chatting completely offline, you need to download the Gemma 4 E2B model (~2.6 GB). This will be cached locally on your device.',
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 24),
+                                  if (state.isDownloading) ...[
+                                    Text(
+                                      state.isDownloadPaused
+                                          ? 'Download paused: ${(state.downloadProgress * 100).toStringAsFixed(1)}%'
+                                          : 'Downloading... ${(state.downloadProgress * 100).toStringAsFixed(1)}%',
+                                      style: const TextStyle(fontWeight: FontWeight.w600),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    LinearProgressIndicator(value: state.downloadProgress),
+                                    const SizedBox(height: 20),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        if (state.isDownloadPaused)
+                                          ElevatedButton.icon(
+                                            onPressed: () {
+                                              context.read<ChatBloc>().add(const ResumeModelDownload());
+                                            },
+                                            icon: const Icon(Icons.play_arrow),
+                                            label: const Text('Resume'),
+                                          )
+                                        else
+                                          ElevatedButton.icon(
+                                            onPressed: () {
+                                              context.read<ChatBloc>().add(const PauseModelDownload());
+                                            },
+                                            icon: const Icon(Icons.pause),
+                                            label: const Text('Pause'),
+                                          ),
+                                        const SizedBox(width: 12),
+                                        OutlinedButton.icon(
+                                          onPressed: () {
+                                            context.read<ChatBloc>().add(const CancelModelDownload());
+                                          },
+                                          icon: const Icon(Icons.close),
+                                          label: const Text('Cancel'),
+                                        ),
+                                      ],
+                                    ),
+                                  ] else
+                                    ElevatedButton.icon(
+                                      onPressed: () {
+                                        context.read<ChatBloc>().add(const DownloadModel());
+                                      },
+                                      style: ElevatedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(30),
+                                        ),
+                                        backgroundColor: state.status == ChatStatus.error
+                                          ? Theme.of(context).colorScheme.errorContainer
+                                          : null,
+                                        foregroundColor: state.status == ChatStatus.error
+                                          ? Theme.of(context).colorScheme.onErrorContainer
+                                          : null,
+                                      ),
+                                      icon: Icon(state.status == ChatStatus.error ? Icons.refresh : Icons.download),
+                                      label: Text(state.status == ChatStatus.error ? 'Retry' : 'Download Model (~2.6GB)'),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+
+                    if (state.messages.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primaryContainer
+                                    .withValues(alpha: 0.2),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                Icons.smart_toy_outlined,
+                                size: 64,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Start a conversation with\nGemma 4 E2B',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(
+                                    color: Colors.grey,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              state.useRag
+                                  ? 'RAG Mode Active (${state.documentCount} docs indexed)'
+                                  : 'Standard Mode. Open config (tune icon) to set up RAG.',
+                              style: const TextStyle(
+                                color: Colors.grey,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    return ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(16),
+                      itemCount: state.messages.length,
+                      itemBuilder: (context, index) {
+                        return _MessageBubble(message: state.messages[index]);
+                      },
+                    );
+                  },
+                ),
+              ),
+
+              // Input bar
+              BlocBuilder<ChatBloc, ChatState>(
+                builder: (context, state) {
+                  final isGenerating = state.status == ChatStatus.generating;
+                  final isLoadingModel = state.status == ChatStatus.loadingModel;
+                  final isChecking = state.status == ChatStatus.checkingStartup;
+                  final needsDownload = state.status == ChatStatus.needsDownload || state.isDownloading;
+                  final canSend = !isGenerating && !isLoadingModel && !isChecking && !needsDownload && state.isModelLoaded;
+
+                  return Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).scaffoldBackgroundColor,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 10,
+                          offset: const Offset(0, -2),
+                        ),
+                      ],
+                    ),
+                    child: SafeArea(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _inputController,
+                              enabled: canSend,
+                              decoration: InputDecoration(
+                                hintText: needsDownload
+                                    ? 'Download model to start chatting'
+                                    : (isLoadingModel
+                                        ? 'Loading model into memory...'
+                                        : (isChecking
+                                            ? 'Initializing...'
+                                            : 'Type a message...')),
+                                border: const OutlineInputBorder(
+                                  borderRadius: BorderRadius.all(Radius.circular(24)),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 12,
+                                ),
+                              ),
+                              maxLines: 4,
+                              minLines: 1,
+                              textInputAction: TextInputAction.send,
+                              onSubmitted: (_) => canSend ? _onSend() : null,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          CircleAvatar(
+                            radius: 24,
+                            backgroundColor: canSend
+                                ? Theme.of(context).colorScheme.primary
+                                : (isGenerating
+                                      ? Theme.of(context).colorScheme.errorContainer
+                                      : Colors.grey[200]),
+                            child: IconButton(
+                              onPressed: isGenerating
+                                  ? () {
+                                      context.read<ChatBloc>().add(
+                                        const CancelGeneration(),
+                                      );
+                                    }
+                                  : (canSend ? _onSend : null),
+                              icon: isLoadingModel || isChecking
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      isGenerating ? Icons.stop : Icons.send,
+                                      color: isGenerating
+                                          ? Theme.of(
+                                              context,
+                                            ).colorScheme.onErrorContainer
+                                          : (canSend ? Colors.white : Colors.grey),
+                                    ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
           BlocBuilder<ChatBloc, ChatState>(
             builder: (context, state) {
-              if (state.indexingProgress == null) {
+              if (state.status != ChatStatus.loadingModel) {
                 return const SizedBox.shrink();
               }
-              return Container(
-                color: Theme.of(context).colorScheme.primaryContainer,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-                child: Row(
-                  children: [
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Indexing document... ${(state.indexingProgress! * 100).toStringAsFixed(0)}%',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onPrimaryContainer,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
 
-          // Message list
-          Expanded(
-            child: BlocConsumer<ChatBloc, ChatState>(
-              listener: (context, state) {
-                if (state.status == ChatStatus.generating) {
-                  _scrollToBottom();
-                }
-                if (state.status == ChatStatus.error &&
-                    state.errorMessage != null) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(state.errorMessage!),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
-              },
-              builder: (context, state) {
-                final isModelMissing = !state.isModelDownloaded && !state.isModelLoaded;
-                final showDownloadUI = state.status == ChatStatus.needsDownload || state.isDownloading || (state.status == ChatStatus.error && isModelMissing);
-
-                if (state.status == ChatStatus.checkingStartup) {
-                  return Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Initializing on-device components...',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                if (showDownloadUI) {
-                  return Center(
+              return ColoredBox(
+                color: Colors.black.withValues(alpha: 0.35),
+                child: const Center(
+                  child: Card(
                     child: Padding(
-                      padding: const EdgeInsets.all(24.0),
-                      child: Card(
-                        elevation: 4,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(32.0),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.15),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Icon(
-                                  state.status == ChatStatus.error 
-                                    ? Icons.error_outline
-                                    : Icons.cloud_download_outlined,
-                                  size: 48,
-                                  color: state.status == ChatStatus.error
-                                    ? Theme.of(context).colorScheme.error
-                                    : Theme.of(context).colorScheme.primary,
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-                              Text(
-                                state.status == ChatStatus.error
-                                  ? 'Download Failed'
-                                  : 'On-Device AI Model Required',
-                                textAlign: TextAlign.center,
-                                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: state.status == ChatStatus.error 
-                                    ? Theme.of(context).colorScheme.error
-                                    : null,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                state.status == ChatStatus.error && state.errorMessage != null
-                                  ? state.errorMessage!
-                                  : 'To start chatting completely offline, you need to download the Gemma 4 E2B model (~2.6 GB). This will be cached locally on your device.',
-                                textAlign: TextAlign.center,
-                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-                              if (state.isDownloading) ...[
-                                Text(
-                                  state.isDownloadPaused
-                                      ? 'Tải xuống đã tạm dừng: ${(state.downloadProgress * 100).toStringAsFixed(1)}%'
-                                      : 'Đang tải xuống... ${(state.downloadProgress * 100).toStringAsFixed(1)}%',
-                                  style: const TextStyle(fontWeight: FontWeight.w600),
-                                ),
-                                const SizedBox(height: 12),
-                                LinearProgressIndicator(value: state.downloadProgress),
-                                const SizedBox(height: 20),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    if (state.isDownloadPaused)
-                                      ElevatedButton.icon(
-                                        onPressed: () {
-                                          context.read<ChatBloc>().add(const ResumeModelDownload());
-                                        },
-                                        icon: const Icon(Icons.play_arrow),
-                                        label: const Text('Tiếp tục'),
-                                      )
-                                    else
-                                      ElevatedButton.icon(
-                                        onPressed: () {
-                                          context.read<ChatBloc>().add(const PauseModelDownload());
-                                        },
-                                        icon: const Icon(Icons.pause),
-                                        label: const Text('Tạm dừng'),
-                                      ),
-                                    const SizedBox(width: 12),
-                                    OutlinedButton.icon(
-                                      onPressed: () {
-                                        context.read<ChatBloc>().add(const CancelModelDownload());
-                                      },
-                                      icon: const Icon(Icons.close),
-                                      label: const Text('Hủy'),
-                                    ),
-                                  ],
-                                ),
-                              ] else
-                                ElevatedButton.icon(
-                                  onPressed: () {
-                                    context.read<ChatBloc>().add(const DownloadModel());
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(30),
-                                    ),
-                                    backgroundColor: state.status == ChatStatus.error
-                                      ? Theme.of(context).colorScheme.errorContainer
-                                      : null,
-                                    foregroundColor: state.status == ChatStatus.error
-                                      ? Theme.of(context).colorScheme.onErrorContainer
-                                      : null,
-                                  ),
-                                  icon: Icon(state.status == ChatStatus.error ? Icons.refresh : Icons.download),
-                                  label: Text(state.status == ChatStatus.error ? 'Thử lại' : 'Download Model (~2.6GB)'),
-                                ),
-                            ],
+                      padding: EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 16),
+                          Text('Loading model into memory...'),
+                          SizedBox(height: 8),
+                          Text(
+                            'Please wait while LiteRT-LM is prepared.',
+                            textAlign: TextAlign.center,
                           ),
-                        ),
+                        ],
                       ),
                     ),
-                  );
-                }
-
-                if (state.messages.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .primaryContainer
-                                .withValues(alpha: 0.2),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            Icons.smart_toy_outlined,
-                            size: 64,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Start a conversation with\nGemma 4 E2B',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(
-                                color: Colors.grey,
-                                fontWeight: FontWeight.w500,
-                              ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          state.useRag
-                              ? 'RAG Mode Active (${state.documentCount} docs indexed)'
-                              : 'Standard Mode. Open config (tune icon) to set up RAG.',
-                          style: const TextStyle(
-                            color: Colors.grey,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                return ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.all(16),
-                  itemCount: state.messages.length,
-                  itemBuilder: (context, index) {
-                    return _MessageBubble(message: state.messages[index]);
-                  },
-                );
-              },
-            ),
-          ),
-
-          // Input bar
-          BlocBuilder<ChatBloc, ChatState>(
-            builder: (context, state) {
-              final isGenerating = state.status == ChatStatus.generating;
-              final isLoadingModel = state.status == ChatStatus.loadingModel;
-              final isChecking = state.status == ChatStatus.checkingStartup;
-              final needsDownload = state.status == ChatStatus.needsDownload || state.isDownloading;
-              final canSend = !isGenerating && !isLoadingModel && !isChecking && !needsDownload && state.isModelLoaded;
-
-              return Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).scaffoldBackgroundColor,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, -2),
-                    ),
-                  ],
-                ),
-                child: SafeArea(
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _inputController,
-                          enabled: canSend,
-                          decoration: InputDecoration(
-                            hintText: needsDownload
-                                ? 'Download model to start chatting'
-                                : (isLoadingModel
-                                    ? 'Loading model into memory...'
-                                    : (isChecking
-                                        ? 'Initializing...'
-                                        : 'Type a message...')),
-                            border: const OutlineInputBorder(
-                              borderRadius: BorderRadius.all(Radius.circular(24)),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 12,
-                            ),
-                          ),
-                          maxLines: 4,
-                          minLines: 1,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (_) => canSend ? _onSend() : null,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      CircleAvatar(
-                        radius: 24,
-                        backgroundColor: canSend
-                            ? Theme.of(context).colorScheme.primary
-                            : (isGenerating
-                                  ? Theme.of(context).colorScheme.errorContainer
-                                  : Colors.grey[200]),
-                        child: IconButton(
-                          onPressed: isGenerating
-                              ? () {
-                                  context.read<ChatBloc>().add(
-                                    const CancelGeneration(),
-                                  );
-                                }
-                              : (canSend ? _onSend : null),
-                          icon: isLoadingModel || isChecking
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : Icon(
-                                  isGenerating ? Icons.stop : Icons.send,
-                                  color: isGenerating
-                                      ? Theme.of(
-                                          context,
-                                        ).colorScheme.onErrorContainer
-                                      : (canSend ? Colors.white : Colors.grey),
-                                ),
-                        ),
-                      ),
-                    ],
                   ),
                 ),
               );
@@ -899,74 +941,27 @@ class _MessageBubble extends StatelessWidget {
                     : const Radius.circular(16),
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (message.text.isNotEmpty)
-                  Text(
-                    message.text,
-                    style: const TextStyle(fontSize: 15, height: 1.4),
-                  ),
-                if (message.isStreaming)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 4),
-                    child: _CursorIndicator(),
-                  ),
-              ],
+            child: SelectableText(
+              message.text,
+              style: TextStyle(
+                color: isUser
+                    ? Theme.of(context).colorScheme.onPrimaryContainer
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            _formatTime(message.timestamp),
-            style: Theme.of(
-              context,
-            ).textTheme.labelSmall?.copyWith(color: Colors.grey[500]),
+          Padding(
+            padding: const EdgeInsets.only(top: 4, left: 4, right: 4),
+            child: Text(
+              isUser ? 'You' : 'Gemma 4 E2B',
+              style: TextStyle(
+                fontSize: 10,
+                color: Colors.grey[600],
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ],
-      ),
-    );
-  }
-
-  String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-  }
-}
-
-/// A custom cursor indicator that flashes/fades for streaming token effects.
-class _CursorIndicator extends StatefulWidget {
-  const _CursorIndicator();
-
-  @override
-  State<_CursorIndicator> createState() => _CursorIndicatorState();
-}
-
-class _CursorIndicatorState extends State<_CursorIndicator>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    )..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _controller,
-      child: Container(
-        width: 8,
-        height: 15,
-        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
       ),
     );
   }

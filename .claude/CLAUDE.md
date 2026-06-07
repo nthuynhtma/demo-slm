@@ -227,10 +227,10 @@ That is acceptable during migration, but the behavior must move toward the workf
 
 ## Implementation Status
 
-**Latest Update**: 2026-06-06 — All 8 architectural tasks completed ✅
+**Latest Update**: 2026-06-07 — Stability & Feedback improvements completed ✅
 
 For detailed implementation tracking with decisions, rationale, and phase notes:
-- **Refer to**: `/memories/repo/` files (decision history, implementation sync notes, gotchas)
+- **Refer to**: `memory.md` (decision history, implementation sync notes, gotchas)
 - **Refer to**: `rules/` files (platform setup, patterns, constraints)
 - **Refer to**: `lib/` source code (current implementation)
 
@@ -239,10 +239,11 @@ Key milestones:
 - ✅ Startup flow (parallel checks, auto-preload)
 - ✅ Generation pipeline (ensure-loaded → retrieve → budget → generate → batch → finalize)
 - ✅ Streaming batching (100ms flush)
-- ✅ Token budgeting (8K context window)
+- ✅ Token budgeting (4K context window synchronized with Native)
 - ✅ Background downloader (pause/resume/cancel)
 - ✅ RAG persistence (durable vector store)
 - ✅ iOS platform (SPM deployment target fix)
+- ✅ UI Feedback & Logging (SnackBar alerts, blocking loading overlay, centralized console logs)
 
 ### Key Implementation Patterns
 
