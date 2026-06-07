@@ -159,15 +159,20 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 self.currentSession = nil
                 self.llmInference = nil
 
+                print("[InferencePlugin] Initializing LlmInference.Options for: \(path)")
                 let options = LlmInference.Options(modelPath: path)
-                options.maxTokens = 1024
-                options.maxTopk = 40
-
-                print("[InferencePlugin] Creating LlmInference engine...")
+                
+                // Cấu hình tối thiểu để tránh treo lúc khởi tạo
+                options.maxTokens = 1024 
+                // options.maxTopk đã chuyển sang Session options trong bản 0.10.35
+                
+                print("[InferencePlugin] Calling LlmInference constructor (this may take 10-30s for 2.6GB model)...")
+                let startTime = CACurrentMediaTime()
                 self.llmInference = try LlmInference(options: options)
+                let endTime = CACurrentMediaTime()
+                
                 self.currentModelPath = path
-
-                print("[InferencePlugin] Model loaded successfully")
+                print("[InferencePlugin] Model loaded successfully in \(String(format: "%.2f", endTime - startTime))s")
                 DispatchQueue.main.async { result(nil) }
             } catch {
                 print("[InferencePlugin] Failed to load model: \(error)")

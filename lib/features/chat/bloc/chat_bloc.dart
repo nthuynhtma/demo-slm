@@ -123,7 +123,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     try {
       // Step 1: Ensure the model is loaded
-      await _modelLoader.ensureModelLoaded();
+      await _modelLoader.ensureModelLoaded().timeout(
+        const Duration(seconds: 90),
+        onTimeout: () {
+          throw TimeoutException('Model loading timed out during message sending.');
+        },
+      );
 
       // Update state to downloaded & loaded
       final isDownloaded = await _modelLoader.isModelDownloaded();
@@ -199,16 +204,36 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     PreloadModel event,
     Emitter<ChatState> emit,
   ) async {
-    if (state.status == ChatStatus.generating ||
-        state.status == ChatStatus.loadingModel) {
+    // Only block if we are currently generating a response.
+    // We allow PreloadModel to proceed even if status is already loadingModel
+    // to ensure the underlying loading logic actually runs.
+    if (state.status == ChatStatus.generating) {
+      return;
+    }
+
+    if (_modelLoader.isLoaded) {
+      emit(state.copyWith(status: ChatStatus.ready, isModelLoaded: true));
       return;
     }
 
     emit(state.copyWith(status: ChatStatus.loadingModel, clearError: true));
 
     try {
-      await _modelLoader.ensureModelLoaded();
+      // ignore: avoid_print
+      print('[ChatBloc] Starting model preload with 90s timeout...');
+      
+      // Add a timeout to prevent hanging UI if native engine fails to respond
+      await _modelLoader.ensureModelLoaded().timeout(
+        const Duration(seconds: 90),
+        onTimeout: () {
+          throw TimeoutException('Model loading timed out after 90 seconds. The model might be too large for this device or the engine is stuck.');
+        },
+      );
+      
       final isDownloaded = await _modelLoader.isModelDownloaded();
+      
+      // ignore: avoid_print
+      print('[ChatBloc] Model preload successful');
       emit(
         state.copyWith(
           status: ChatStatus.ready,
@@ -218,10 +243,12 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         ),
       );
     } catch (e) {
+      // ignore: avoid_print
+      print('[ChatBloc] Model preload failed: $e');
       emit(
         state.copyWith(
           status: ChatStatus.error,
-          errorMessage: e.toString(),
+          errorMessage: 'Failed to load model into memory: $e',
           isModelLoaded: false,
         ),
       );
@@ -433,6 +460,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         ));
         break;
       case ModelDownloadStatus.complete:
+        // ignore: avoid_print
+        print('[ChatBloc] Download complete. Triggering preload...');
         emit(state.copyWith(
           isDownloading: false,
           isDownloadPaused: false,
@@ -443,6 +472,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         add(const PreloadModel());
         break;
       case ModelDownloadStatus.failed:
+        // ignore: avoid_print
+        print('[ChatBloc] Download failed: ${event.errorMessage}');
         emit(state.copyWith(
           isDownloading: false,
           isDownloadPaused: false,
@@ -654,8 +685,19 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
       // 3. Branch based on whether model is downloaded
       if (isDownloaded) {
+        // ignore: avoid_print
+        print('[ChatBloc] Model found on disk at startup. Auto-preloading with 90s timeout...');
         emit(state.copyWith(status: ChatStatus.loadingModel));
-        await _modelLoader.ensureModelLoaded();
+        
+        await _modelLoader.ensureModelLoaded().timeout(
+          const Duration(seconds: 90),
+          onTimeout: () {
+            throw TimeoutException('Startup model loading timed out after 90 seconds.');
+          },
+        );
+        
+        // ignore: avoid_print
+        print('[ChatBloc] Startup auto-preload successful');
         emit(
           state.copyWith(
             status: ChatStatus.ready,
@@ -664,6 +706,8 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
           ),
         );
       } else {
+        // ignore: avoid_print
+        print('[ChatBloc] Model not found on disk at startup.');
         emit(state.copyWith(status: ChatStatus.needsDownload));
       }
     } catch (e) {

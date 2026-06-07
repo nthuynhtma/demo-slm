@@ -69,8 +69,14 @@ class ModelLoader {
     // Step 3: Load the model into LiteRT-LM engine
     // loadModel() throws on failure
     try {
+      // ignore: avoid_print
+      print('[ModelLoader] Loading model into native engine: $path');
       await _inferenceService.loadModel(path);
+      // ignore: avoid_print
+      print('[ModelLoader] Native model load complete');
     } catch (e) {
+      // ignore: avoid_print
+      print('[ModelLoader] Native model load failed: $e');
       // Wrap native errors with more context
       if (e.toString().contains('LOAD_FAILED') || e.toString().contains('LOAD_FAILED_CRITICAL')) {
         rethrow; // Already has good error message from native
