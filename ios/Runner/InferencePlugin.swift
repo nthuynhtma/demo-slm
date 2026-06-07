@@ -132,6 +132,29 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private func loadModel(path: String, result: @escaping FlutterResult) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
+                // Validate file exists and has reasonable size before loading
+                let fileManager = FileManager.default
+                guard fileManager.fileExists(atPath: path) else {
+                    DispatchQueue.main.async {
+                        result(FlutterError(
+                            code: "LOAD_FAILED",
+                            message: "Model file not found at: \(path)",
+                            details: nil
+                        ))
+                    }
+                    return
+                }
+                
+                let fileAttributes = try fileManager.attributesOfItem(atPath: path)
+                let fileSize = fileAttributes[.size] as? UInt64 ?? 0
+                let sizeMB = fileSize / 1024 / 1024
+                print("[InferencePlugin] Loading model from: \(path) (size: \(fileSize) bytes, ~\(sizeMB) MB)")
+                
+                // Expected ~2.59 GB (2588147712 bytes)
+                if fileSize < 2_000_000_000 {
+                    print("[InferencePlugin] WARNING: Model file size seems too small: \(fileSize) bytes (expected ~2.59 GB)")
+                }
+
                 // Close existing inference instance trước khi tạo mới
                 self.currentSession = nil
                 self.llmInference = nil
@@ -140,16 +163,19 @@ class InferencePlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
                 options.maxTokens = 1024
                 options.maxTopk = 40
 
+                print("[InferencePlugin] Creating LlmInference engine...")
                 self.llmInference = try LlmInference(options: options)
                 self.currentModelPath = path
 
+                print("[InferencePlugin] Model loaded successfully")
                 DispatchQueue.main.async { result(nil) }
             } catch {
+                print("[InferencePlugin] Failed to load model: \(error)")
                 DispatchQueue.main.async {
                     result(FlutterError(
                         code: "LOAD_FAILED",
-                        message: error.localizedDescription,
-                        details: nil
+                        message: "Load failed: \(error.localizedDescription)",
+                        details: String(describing: error)
                     ))
                 }
             }

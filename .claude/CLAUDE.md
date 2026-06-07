@@ -142,7 +142,7 @@ Chat / App Workflow Coordinator (flutter_bloc)
 | Layer | Technology |
 |-------|------------|
 | UI | Flutter 3.x, flutter_bloc |
-| Inference | LiteRT-LM via platform channels (0.10.36) |
+| Inference | LiteRT-LM via platform channels (0.10.35) |
 | Model | `litert-community/gemma-4-E2B-it-litert-lm` (text-only .litertlm) |
 | Mobile model artifact | `.litertlm` |
 | Web artifact | `.task` |
@@ -202,9 +202,8 @@ That is acceptable during migration, but the behavior must move toward the workf
 
 - The mobile source-of-truth model format is `.litertlm`.
 - The preferred Hugging Face repo is `litert-community/gemma-4-E2B-it-litert-lm`.
-- iOS uses session-based generation for `MediaPipeTasksGenAI 0.10.36`.
-- Android uses `tasks-genai:0.10.36`.
-- Version 0.10.36 required để support `STABLEHLO_COMPOSITE` op trong model .litertlm.
+- iOS uses session-based generation for `MediaPipeTasksGenAI 0.10.35`.
+- Android uses `tasks-genai:0.10.35`.
 - Startup, typing preload, generation staging, streaming batching, and background release are now first-class architecture decisions.
 - **Download engine**: `background_downloader` thay thế `Dio` cho model 2.6 GB. Download sống sót qua app suspend/terminate nhờ native engine. Updates reactive qua Stream pattern.
 - **Download status machine**: `ModelDownloadStatus { none, enqueued, downloading, paused, complete, failed, canceled }`.

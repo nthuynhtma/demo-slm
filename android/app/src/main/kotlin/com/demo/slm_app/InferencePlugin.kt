@@ -101,6 +101,23 @@ class InferencePlugin(private val context: Context) :
     private fun loadModel(path: String, result: MethodChannel.Result) {
         scope.launch {
             try {
+                // Validate file exists and has reasonable size before loading
+                val modelFile = java.io.File(path)
+                if (!modelFile.exists()) {
+                    mainHandler.post {
+                        result.error("LOAD_FAILED", "Model file not found at: $path", null)
+                    }
+                    return@launch
+                }
+                
+                val fileSize = modelFile.length()
+                Log.i("InferencePlugin", "Loading model from: $path (size: $fileSize bytes, ~${fileSize / 1024 / 1024} MB)")
+                
+                // Expected ~2.59 GB (2588147712 bytes)
+                if (fileSize < 2_000_000_000) {
+                    Log.w("InferencePlugin", "Model file size seems too small: $fileSize bytes (expected ~2.59 GB)")
+                }
+
                 // Close existing engine before creating a new one
                 llmInference?.close()
                 llmInference = null
@@ -111,18 +128,32 @@ class InferencePlugin(private val context: Context) :
                     .setMaxTokens(1024)
                     .build()
 
+                Log.i("InferencePlugin", "Creating LlmInference engine...")
                 llmInference = LlmInference.createFromOptions(context, options)
                 currentModelPath = path
 
+                Log.i("InferencePlugin", "Model loaded successfully")
                 mainHandler.post { result.success(null) }
 
             } catch (e: Exception) {
-                Log.e("InferencePlugin", "Failed to load model", e)
+                Log.e("InferencePlugin", "Failed to load model: ${e.message}", e)
                 mainHandler.post {
-                    result.error("LOAD_FAILED", e.message ?: "Unknown error", null)
+                    result.error("LOAD_FAILED", "Load failed: ${e.message ?: e.javaClass.simpleName}", e.stackTraceToString())
+                }
+            } catch (e: Throwable) {
+                Log.e("InferencePlugin", "Critical error loading model (Throwable): ${e.message}", e)
+                mainHandler.post {
+                    result.error("LOAD_FAILED_CRITICAL", "Critical error: ${e.message ?: e.javaClass.simpleName}", e.stackTraceToString())
                 }
             }
         }
+    }
+    
+    private fun Throwable.stackTraceToString(): String {
+        val sw = java.io.StringWriter()
+        val pw = java.io.PrintWriter(sw)
+        this.printStackTrace(pw)
+        return sw.toString()
     }
 
     private fun startGeneration(prompt: String, result: MethodChannel.Result) {
@@ -134,33 +165,20 @@ class InferencePlugin(private val context: Context) :
 
         scope.launch {
             try {
-                // Call generateResponseAsync with the prompt
-                // This returns a ListenableFuture<String> with the full response
-                val future = engine.generateResponseAsync(prompt)
-                
-                // Listen for the result and stream it
-                future.addListener({
+                // Sử dụng generateResponseAsync với ProgressListener để có streaming thực tế
+                // (MediaPipe GenAI Android SDK 0.10.22+ support)
+                engine.generateResponseAsync(prompt) { partialResponse, done ->
                     if (!isCancelled) {
-                        try {
-                            val fullResponse = future.get()
-                            mainHandler.post {
-                                // Stream the response by splitting into words
-                                val tokens = fullResponse?.split(" ") ?: emptyList()
-                                for (token in tokens) {
-                                    if (isCancelled) break
-                                    eventSink?.success("$token ")
-                                }
-                                eventSink?.success("[DONE]")
+                        mainHandler.post {
+                            if (partialResponse != null) {
+                                eventSink?.success(partialResponse)
                             }
-                        } catch (e: Exception) {
-                            Log.e("InferencePlugin", "Failed to get result", e)
-                            mainHandler.post {
-                                eventSink?.error("GENERATION_FAILED", e.message ?: "Generation error", null)
+                            if (done) {
+                                eventSink?.success("[DONE]")
                             }
                         }
                     }
-                }, java.util.concurrent.Executors.newSingleThreadExecutor())
-                
+                }
             } catch (e: Exception) {
                 Log.e("InferencePlugin", "Generation failed", e)
                 mainHandler.post {

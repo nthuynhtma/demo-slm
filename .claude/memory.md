@@ -9,7 +9,6 @@
 | 2026-06 | MiniLM cho embedding | ~22MB, đủ chất lượng, nhanh hơn Gemma embedding |
 | 2026-06 | flutter_bloc | Consistent với codebase TMA hiện tại |
 | 2026-06 | **fonnx** cho ONNX runtime thay vì onnxruntime_flutter | fonnx actively maintained (last push 2026-05-22), onnxruntime_flutter stalled since Dec 2024 |
-| 2026-06 | **LiteRT-LM 0.10.35 → 0.10.36** (nâng cấp) | 0.10.35 không support STABLEHLO_COMPOSITE op trong prefill_decode section, cần 0.10.36+ để tương thích với Gemma 4 E2B text-only .litertlm |
 | 2026-06 | **iOS bridge dùng `LlmInference.Session` cho generation settings** | Với MediaPipeTasksGenAI 0.10.35, `temperature/topk` nằm ở session options, không nằm ở engine options |
 | 2026-06 | **Băm SHA256 dạng stream để tránh OOM** | Tránh lỗi tràn bộ nhớ (OOM) khi băm file model nặng 2.6GB trên thiết bị di động |
 | 2026-06 | **Resumable download qua Dio Range** | Hỗ trợ tải tiếp tục model 2.6GB bằng HTTP Range header để tăng độ ổn định |
@@ -108,7 +107,6 @@ App Background
 - `LlmInference.generateResponseAsync` có `setResultListener(partialResult, done)` trên Android
 - iOS dùng `AsyncSequence` (Swift async stream)
 - EventChannel Flutter có thể bridge được, nhưng **cần post callback về main thread** trước khi gọi `eventSink.success()`
-- Litert-LM version hiện tại: **0.10.36** (nâng cấp từ 0.10.35 để fix STABLEHLO_COMPOSITE)
 
 ### ✅ iOS MediaPipeTasksGenAI 0.10.35 bridge API
 - **Status**: ✅ Confirmed from installed pod headers + successful local build
@@ -148,8 +146,6 @@ App Background
 
 ## Gotchas Discovered
 
-- **STABLEHLO_COMPOSITE lỗi prefill**: Model `.litertlm` chứa op MLIR `STABLEHLO_COMPOSITE` mà LiteRT-LM 0.10.35 không support với XNNPACK (CPU). Lỗi `prefill_runner->AllocateTensors() == kTfLiteOk (1 vs. 0)`. Cần LiteRT-LM 0.10.36+ để tương thích.
-- **Version mismatch Android/iOS**: Android 0.10.22 quá cũ so với iOS 0.10.35. Đồng bộ lên 0.10.36 cả 2 platform.
 - **Android LiteRT-LM API**: `generateResponseAsync(prompt)` returns `ListenableFuture<String>` (not `ListenableFuture<ProgressListener>`), must call `.addListener()` to get result
 - LiteRT-LM callback KHÔNG chạy trên main thread → phải post về main thread trước khi update eventSink
 - Gemma chat template dùng `<start_of_turn>` / `<end_of_turn>`, không phải `[INST]` hay `<|user|>`

@@ -1,15 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Download model từ HuggingFace -->
+    <!-- 1. BASE AND INTERNET PERMISSIONS -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Tùy chọn: restrict download WiFi only -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+    <!-- 2. BACKGROUND & FOREGROUND SERVICES PERMISSIONS (Added for persistent tray progress) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
 
     <application
         android:label="slm_app"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:largeHeap="true">
+        android:largeHeap="true"> <!-- Large heap enabled to assist with large SLM runtime initialization -->
+        
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -19,19 +24,42 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
+            
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- 
+        ===================================================================================
+        NATIVE BACKGROUND SERVICES REGISTER 
+        ===================================================================================
+        -->
+        <!-- Standard Foreground Bridge for WorkManager (Required for Android 10 to 13 support) -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <!-- User-Initiated Data Transfer (UIDT) Service (Required for Android 14+ app-kill survivability) -->
+        <service 
+            android:name="com.bbflight.background_downloader.UIDTJobService" 
+            android:permission="android.permission.BIND_JOB_SERVICE" 
+            android:exported="true" 
+            android:foregroundServiceType="dataSync" />
+            
     </application>
+
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>

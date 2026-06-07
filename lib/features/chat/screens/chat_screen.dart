@@ -285,6 +285,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 }
               },
               builder: (context, state) {
+                final isModelMissing = !state.isModelDownloaded && !state.isModelLoaded;
+                final showDownloadUI = state.status == ChatStatus.needsDownload || state.isDownloading || (state.status == ChatStatus.error && isModelMissing);
+
                 if (state.status == ChatStatus.checkingStartup) {
                   return Center(
                     child: Column(
@@ -303,7 +306,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   );
                 }
 
-                if (state.status == ChatStatus.needsDownload || state.isDownloading) {
+                if (showDownloadUI) {
                   return Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24.0),
@@ -324,22 +327,33 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                   shape: BoxShape.circle,
                                 ),
                                 child: Icon(
-                                  Icons.cloud_download_outlined,
+                                  state.status == ChatStatus.error 
+                                    ? Icons.error_outline
+                                    : Icons.cloud_download_outlined,
                                   size: 48,
-                                  color: Theme.of(context).colorScheme.primary,
+                                  color: state.status == ChatStatus.error
+                                    ? Theme.of(context).colorScheme.error
+                                    : Theme.of(context).colorScheme.primary,
                                 ),
                               ),
                               const SizedBox(height: 24),
                               Text(
-                                'On-Device AI Model Required',
+                                state.status == ChatStatus.error
+                                  ? 'Download Failed'
+                                  : 'On-Device AI Model Required',
                                 textAlign: TextAlign.center,
                                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                                   fontWeight: FontWeight.bold,
+                                  color: state.status == ChatStatus.error 
+                                    ? Theme.of(context).colorScheme.error
+                                    : null,
                                 ),
                               ),
                               const SizedBox(height: 12),
                               Text(
-                                'To start chatting completely offline, you need to download the Gemma 4 E2B model (~2.6 GB). This will be cached locally on your device.',
+                                state.status == ChatStatus.error && state.errorMessage != null
+                                  ? state.errorMessage!
+                                  : 'To start chatting completely offline, you need to download the Gemma 4 E2B model (~2.6 GB). This will be cached locally on your device.',
                                 textAlign: TextAlign.center,
                                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: Colors.grey[600],
@@ -395,9 +409,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(30),
                                     ),
+                                    backgroundColor: state.status == ChatStatus.error
+                                      ? Theme.of(context).colorScheme.errorContainer
+                                      : null,
+                                    foregroundColor: state.status == ChatStatus.error
+                                      ? Theme.of(context).colorScheme.onErrorContainer
+                                      : null,
                                   ),
-                                  icon: const Icon(Icons.download),
-                                  label: const Text('Download Model (~2.6GB)'),
+                                  icon: Icon(state.status == ChatStatus.error ? Icons.refresh : Icons.download),
+                                  label: Text(state.status == ChatStatus.error ? 'Thử lại' : 'Download Model (~2.6GB)'),
                                 ),
                             ],
                           ),

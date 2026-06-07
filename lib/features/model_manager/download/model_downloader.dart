@@ -43,6 +43,14 @@ class ModelDownloader {
   static const String defaultModelUrl =
       'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
 
+  /// Expected SHA256 checksum for the model file (gemma-4-E2B-it.litertlm)
+  /// From HuggingFace LFS metadata: oid = 181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c
+  static const String expectedModelSha256 =
+      '181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c';
+
+  /// Expected file size in bytes (~2.59 GB)
+  static const int expectedModelSize = 2588147712;
+
   ModelDownloader({
     FlutterSecureStorage? secureStorage,
   }) : _secureStorage = secureStorage ?? const FlutterSecureStorage();
@@ -79,6 +87,15 @@ class ModelDownloader {
 
     // Track active/completed tasks enqueued in background
     await FileDownloader().trackTasks();
+
+    // Clean up stale model path if file was deleted externally
+    final savedPath = await getCachedModelPath();
+    if (savedPath != null) {
+      if (!await File(savedPath).exists()) {
+        stderr.writeln('[ModelDownloader] Stale model path found, clearing: $savedPath');
+        await _secureStorage.delete(key: 'model_path');
+      }
+    }
 
     // Listen to background downloader updates
     FileDownloader().updates.listen((update) {
@@ -132,16 +149,23 @@ class ModelDownloader {
     String? expectedSha256,
   }) async {
     final modelUrl = url ?? defaultModelUrl;
+    final checksum = expectedSha256 ?? expectedModelSha256;
 
-    // 1. Check if final file already exists
+    // 1. Check if final file already exists and is valid
     final dir = await getApplicationSupportDirectory();
     final fileName = 'gemma-4-E2B-it.litertlm';
     final filePath = '${dir.path}/$fileName';
 
     final finalFile = File(filePath);
     if (await finalFile.exists()) {
-      if (expectedSha256 != null && expectedSha256.isNotEmpty) {
-        final isValid = await verifyChecksum(filePath, expectedSha256);
+      // Validate file size first (fast check)
+      final fileSize = await finalFile.length();
+      if (fileSize != expectedModelSize) {
+        // Size mismatch, delete and re-download
+        await finalFile.delete();
+      } else if (checksum.isNotEmpty) {
+        // Size matches, verify checksum
+        final isValid = await verifyChecksum(filePath, checksum);
         if (isValid) {
           await _secureStorage.write(key: 'model_path', value: filePath);
           _emitUpdate(ModelDownloadStatus.complete, 1.0);
@@ -175,7 +199,9 @@ class ModelDownloader {
       updates: Updates.statusAndProgress,
       retries: 3,
       requiresWiFi: false, // User explicitly commented "ko" to wifi limitation
+      metaData: 'with-notification',
       allowPause: true,
+      priority: 0,
     );
 
     // 4. Check if task is already running
@@ -246,6 +272,9 @@ class ModelDownloader {
     ModelDownloadStatus mappedStatus;
     String? errorMessage;
 
+    // Log the status change for debugging
+    stderr.writeln('[ModelDownloader] Status update: ${update.task.taskId} -> $status');
+
     switch (status) {
       case TaskStatus.enqueued:
         mappedStatus = ModelDownloadStatus.enqueued;
@@ -260,25 +289,59 @@ class ModelDownloader {
         final dir = await getApplicationSupportDirectory();
         final filePath = '${dir.path}/gemma-4-E2B-it.litertlm';
 
-        final isValid = await verifyChecksum(filePath, 'TODO_FILL_AFTER_DOWNLOAD');
+        // Verify file existence
+        final file = File(filePath);
+        if (!await file.exists()) {
+          mappedStatus = ModelDownloadStatus.failed;
+          errorMessage = 'File model không tìm thấy sau khi tải xong tại: $filePath';
+          stderr.writeln('[ModelDownloader] ERROR: $errorMessage');
+          break;
+        }
+
+        // Verify file size
+        final fileSize = await file.length();
+        if (fileSize != expectedModelSize) {
+          mappedStatus = ModelDownloadStatus.failed;
+          errorMessage = 'Kích thước file không khớp (mong đợi $expectedModelSize bytes, nhận được $fileSize). File có thể bị lỗi.';
+          stderr.writeln('[ModelDownloader] ERROR: $errorMessage');
+          await file.delete();
+          break;
+        }
+
+        // Verify checksum
+        stderr.writeln('[ModelDownloader] Đang xác thực checksum...');
+        final isValid = await verifyChecksum(filePath, expectedModelSha256);
         if (isValid) {
           await _secureStorage.write(key: 'model_path', value: filePath);
           mappedStatus = ModelDownloadStatus.complete;
+          stderr.writeln('[ModelDownloader] Tải và xác thực model thành công.');
         } else {
-          final file = File(filePath);
           if (await file.exists()) {
             await file.delete();
           }
           mappedStatus = ModelDownloadStatus.failed;
-          errorMessage = 'Model checksum verification failed. The downloaded file might be corrupt.';
+          errorMessage = 'Xác thực checksum thất bại. File tải về có thể đã bị hỏng trong quá trình truyền tải.';
+          stderr.writeln('[ModelDownloader] ERROR: $errorMessage');
         }
         break;
       case TaskStatus.failed:
         mappedStatus = ModelDownloadStatus.failed;
-        errorMessage = update.exception?.description ?? 'Unknown download error';
+        final exception = update.exception;
+        if (exception != null) {
+          errorMessage = 'Lỗi tải xuống: ${exception.description}';
+        } else {
+          errorMessage = 'Lỗi tải xuống không xác định';
+        }
+        stderr.writeln('[ModelDownloader] ERROR: $errorMessage');
         break;
       case TaskStatus.canceled:
         mappedStatus = ModelDownloadStatus.canceled;
+        stderr.writeln('[ModelDownloader] Tải xuống đã bị hủy.');
+        break;
+      case TaskStatus.notFound:
+        mappedStatus = ModelDownloadStatus.failed;
+        errorMessage = 'Không tìm thấy tác vụ tải xuống hoặc file trên server.';
+        stderr.writeln('[ModelDownloader] ERROR: $errorMessage');
         break;
       default:
         mappedStatus = ModelDownloadStatus.none;
@@ -306,7 +369,11 @@ class ModelDownloader {
   Future<bool> isModelDownloaded() async {
     final path = await getCachedModelPath();
     if (path == null) return false;
-    return await File(path).exists();
+    final file = File(path);
+    if (!await file.exists()) return false;
+    // Quick size validation
+    final size = await file.length();
+    return size == expectedModelSize;
   }
 
   /// Get the cached model file path.
@@ -336,7 +403,7 @@ class ModelDownloader {
 
   /// Verify model integrity using streaming SHA256 hashing to avoid OOM.
   Future<bool> verifyChecksum(String filePath, String expectedSha256) async {
-    if (expectedSha256.isEmpty || expectedSha256 == 'TODO_FILL_AFTER_DOWNLOAD') {
+    if (expectedSha256.isEmpty) {
       try {
         final calculated = await _calculateSha256(File(filePath));
         stderr.writeln('Calculated model SHA-256: $calculated');

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../../../core/channels/inference_service.dart';
 import '../../../core/errors/app_exceptions.dart';
 import '../download/model_downloader.dart';
@@ -50,9 +52,31 @@ class ModelLoader {
     // Step 2: Path is non-null because isModelDownloaded() returned true above
     final path = (await _downloader.getCachedModelPath())!;
 
+    // Step 2b: Validate file size before attempting native load
+    final file = File(path);
+    if (!await file.exists()) {
+      throw ModelLoadException('Model file not found at path: $path');
+    }
+    
+    final fileSize = await file.length();
+    const expectedSize = ModelDownloader.expectedModelSize;
+    if (fileSize != expectedSize) {
+      // Log warning but don't fail - the downloader should have validated this
+      // ignore: avoid_print
+      print('[ModelLoader] WARNING: Model file size mismatch (got $fileSize bytes, expected $expectedSize bytes)');
+    }
+
     // Step 3: Load the model into LiteRT-LM engine
     // loadModel() throws on failure
-    await _inferenceService.loadModel(path);
+    try {
+      await _inferenceService.loadModel(path);
+    } catch (e) {
+      // Wrap native errors with more context
+      if (e.toString().contains('LOAD_FAILED') || e.toString().contains('LOAD_FAILED_CRITICAL')) {
+        rethrow; // Already has good error message from native
+      }
+      throw ModelLoadException('Failed to load model into LiteRT-LM engine: $e');
+    }
 
     _isLoaded = true;
   }
